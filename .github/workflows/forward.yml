@@ -30,22 +30,18 @@ jobs:
           from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
           from cryptography.hazmat.primitives import hashes
 
-          # 1. Base64 解码提取密文与盐
           raw = base64.b64decode(os.environ['ENCRYPTED_PAYLOAD'])
           salt, iv, ciphertext = raw[:16], raw[16:28], raw[28:]
 
-          # 2. 派生密钥并解密
           kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
           key = kdf.derive(os.environ['PASSWORD'].encode())
           aesgcm = AESGCM(key)
           decrypted_str = aesgcm.decrypt(iv, ciphertext, None).decode('utf-8')
 
-          # 3. 解析 JSON 结构提取标题和正文
           data = json.loads(decrypted_str)
           title = data.get('title', 'note.md').strip()
           content = data.get('content', '')
 
-          # 4. 规范化文件名并写入文件
           safe_title = ''.join(c if c.isalnum() or c in '._- ' else '_' for c in title)
           if not safe_title.endswith('.md'):
               safe_title += '.md'
@@ -53,7 +49,6 @@ jobs:
           with open('note.md', 'w', encoding='utf-8') as f:
               f.write(content)
 
-          # 将提取出来的安全文件名写入环境变量供下一步使用
           with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env_file:
               env_file.write(f'FINAL_TITLE={safe_title}\n')
           "
@@ -65,9 +60,9 @@ jobs:
           WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
         run: |
           TARGET="${WEBDAV_URL}${FINAL_TITLE}"
-          echo "准备上传文件: $FINAL_TITLE"
+          echo "正在上传至: $TARGET"
 
-          # 使用 curl 发起 HTTP PUT 上传
+          # 自动跟随 301/302，并打印 HTTP 头排查状态
           curl -i -L --fail-with-body \
             -u "$WEBDAV_USER:$WEBDAV_PASSWORD" \
             -T note.md \
