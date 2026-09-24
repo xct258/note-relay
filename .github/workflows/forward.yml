@@ -1,0 +1,59 @@
+name: Decrypt and Forward Note
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: '笔记标题'
+        required: true
+        default: 'note.md'
+      content:
+        description: 'Base64 密文'
+        required: true
+
+jobs:
+  process-and-send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Cryptography
+        run: pip install cryptography
+
+      - name: Decrypt Payload
+        env:
+          ENCRYPTED_DATA: ${{ github.event.inputs.content }}
+          PASSWORD: ${{ secrets.DECRYPT_PASSWORD }}
+        run: |
+          python3 -c "
+          import os, base64
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+          from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+          from cryptography.hazmat.primitives import hashes
+
+          raw = base64.b64decode(os.environ['ENCRYPTED_DATA'])
+          salt, iv, ciphertext = raw[:16], raw[16:28], raw[28:]
+
+          kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
+          key = kdf.derive(os.environ['PASSWORD'].encode())
+
+          aesgcm = AESGCM(key)
+          plaintext = aesgcm.decrypt(iv, ciphertext, None).decode('utf-8')
+
+          with open('decrypted_note.md', 'w', encoding='utf-8') as f:
+              f.write(plaintext)
+          "
+
+      - name: Forward to Destination
+        env:
+          TARGET_URL: ${{ secrets.TARGET_WEBHOOK_URL }}
+          NOTE_TITLE: ${{ github.event.inputs.title }}
+        run: |
+          # 默认示例：以 HTTP POST multipart 方式上传文件到你的服务器
+          # 如需发给飞书/Telegram，也可以在此处改为发送 JSON
+          curl -X POST "$TARGET_URL" \
+            -F "title=$NOTE_TITLE" \
+            -F "file=@decrypted_note.md"
