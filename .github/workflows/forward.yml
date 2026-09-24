@@ -1,10 +1,10 @@
-name: Decrypt and Forward Note
+name: Decrypt and Upload to openlist WebDAV
 
 on:
   workflow_dispatch:
     inputs:
       title:
-        description: '笔记标题'
+        description: '笔记文件名'
         required: true
         default: 'note.md'
       content:
@@ -12,7 +12,7 @@ on:
         required: true
 
 jobs:
-  process-and-send:
+  decrypt-and-upload:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Python
@@ -47,13 +47,27 @@ jobs:
               f.write(plaintext)
           "
 
-      - name: Forward to Destination
+      - name: Upload to WebDAV
         env:
-          TARGET_URL: ${{ secrets.TARGET_WEBHOOK_URL }}
+          WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
+          WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
+          WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
           NOTE_TITLE: ${{ github.event.inputs.title }}
         run: |
-          # 默认示例：以 HTTP POST multipart 方式上传文件到你的服务器
-          # 如需发给飞书/Telegram，也可以在此处改为发送 JSON
-          curl -X POST "$TARGET_URL" \
-            -F "title=$NOTE_TITLE" \
-            -F "file=@decrypted_note.md"
+          # 确保文件名安全，去除特殊空格或斜杠
+          SAFE_FILENAME=$(echo "${NOTE_TITLE:-note.md}" | tr ' /' '_-')
+          
+          # 确保后缀为 .md
+          if [[ "$SAFE_FILENAME" != *.md ]]; then
+            SAFE_FILENAME="${SAFE_FILENAME}.md"
+          fi
+
+          echo "正在上传至 openlist: ${WEBDAV_URL}${SAFE_FILENAME}"
+
+          # 上传文件至 openlist WebDAV
+          curl --fail -sS -X PUT \
+            -u "$WEBDAV_USER:$WEBDAV_PASSWORD" \
+            -T decrypted_note.md \
+            "${WEBDAV_URL}${SAFE_FILENAME}"
+
+          echo "✅ 上传成功！"
