@@ -1,18 +1,14 @@
-name: Decrypt and Upload to openlist WebDAV
+name: Decrypt Package and Upload to WebDAV
 
 on:
   workflow_dispatch:
     inputs:
-      title:
-        description: '笔记文件名'
-        required: true
-        default: 'note.md'
-      content:
-        description: 'Base64 密文'
+      payload:
+        description: '全量 Base64 密文包'
         required: true
 
 jobs:
-  decrypt-and-upload:
+  decrypt-and-sync:
     runs-on: ubuntu-latest
     steps:
       - name: Set up Python
@@ -20,31 +16,46 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Cryptography
+      - name: Install Dependencies
         run: pip install cryptography
 
-      - name: Decrypt Payload
+      - name: Decrypt Package
         env:
-          ENCRYPTED_DATA: ${{ github.event.inputs.content }}
+          ENCRYPTED_PAYLOAD: ${{ github.event.inputs.payload }}
           PASSWORD: ${{ secrets.DECRYPT_PASSWORD }}
         run: |
           python3 -c "
-          import os, base64
+          import os, base64, json
           from cryptography.hazmat.primitives.ciphers.aead import AESGCM
           from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
           from cryptography.hazmat.primitives import hashes
 
-          raw = base64.b64decode(os.environ['ENCRYPTED_DATA'])
+          # 1. Base64 解码提取密文与盐
+          raw = base64.b64decode(os.environ['ENCRYPTED_PAYLOAD'])
           salt, iv, ciphertext = raw[:16], raw[16:28], raw[28:]
 
+          # 2. 派生密钥并解密
           kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
           key = kdf.derive(os.environ['PASSWORD'].encode())
-
           aesgcm = AESGCM(key)
-          plaintext = aesgcm.decrypt(iv, ciphertext, None).decode('utf-8')
+          decrypted_str = aesgcm.decrypt(iv, ciphertext, None).decode('utf-8')
 
-          with open('decrypted_note.md', 'w', encoding='utf-8') as f:
-              f.write(plaintext)
+          # 3. 解析 JSON 结构提取标题和正文
+          data = json.loads(decrypted_str)
+          title = data.get('title', 'note.md').strip()
+          content = data.get('content', '')
+
+          # 4. 规范化文件名并写入文件
+          safe_title = ''.join(c if c.isalnum() or c in '._- ' else '_' for c in title)
+          if not safe_title.endswith('.md'):
+              safe_title += '.md'
+
+          with open('note.md', 'w', encoding='utf-8') as f:
+              f.write(content)
+
+          # 将提取出来的安全文件名写入环境变量供下一步使用
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env_file:
+              env_file.write(f'FINAL_TITLE={safe_title}\n')
           "
 
       - name: Upload to WebDAV
@@ -52,22 +63,14 @@ jobs:
           WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
           WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
           WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
-          NOTE_TITLE: ${{ github.event.inputs.title }}
         run: |
-          # 确保文件名安全，去除特殊空格或斜杠
-          SAFE_FILENAME=$(echo "${NOTE_TITLE:-note.md}" | tr ' /' '_-')
-          
-          # 确保后缀为 .md
-          if [[ "$SAFE_FILENAME" != *.md ]]; then
-            SAFE_FILENAME="${SAFE_FILENAME}.md"
-          fi
+          TARGET="${WEBDAV_URL}${FINAL_TITLE}"
+          echo "准备上传文件: $FINAL_TITLE"
 
-          echo "正在上传至 openlist: ${WEBDAV_URL}${SAFE_FILENAME}"
-
-          # 上传文件至 openlist WebDAV
-          curl --fail -sS -X PUT \
+          # 使用 curl 发起 HTTP PUT 上传
+          curl -i -L --fail-with-body \
             -u "$WEBDAV_USER:$WEBDAV_PASSWORD" \
-            -T decrypted_note.md \
-            "${WEBDAV_URL}${SAFE_FILENAME}"
+            -T note.md \
+            "$TARGET"
 
           echo "✅ 上传成功！"
