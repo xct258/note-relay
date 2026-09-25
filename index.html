@@ -128,31 +128,14 @@
   <button id="sendBtn" onclick="processAndSend()">全量加密并提交中转</button>
   <div id="notice"></div>
 
-  <details open>
-    <summary>⚙️ 仓库与连接配置（保存在本机浏览器）</summary>
-    <div class="row">
-      <div class="form-group"><label>Owner</label><input type="text" id="cfgOwner" /></div>
-      <div class="form-group"><label>Repo</label><input type="text" id="cfgRepo" /></div>
-      <div class="form-group"><label>Workflow 文件</label><input type="text" id="cfgWorkflow" /></div>
-    </div>
-    <div class="form-group"><label>Token 密文串（v2，以 0x01 开头；兼容读取 v1 老串）</label>
-      <input type="text" id="cfgBlob" placeholder="粘贴 ENCRYPTED_TOKEN_BLOB" autocomplete="off" />
-    </div>
-    <div class="toolbar">
-      <button type="button" class="mini-btn" id="btnSaveCfg">💾 保存配置</button>
-      <button type="button" class="mini-btn" id="btnResetCfg">↩️ 恢复默认</button>
-    </div>
-    <div class="stats">默认配置编译在页面中；你的修改仅存 localStorage，不上传。</div>
-  </details>
-
   <details>
-    <summary>🔧 重新生成 Token 密文串（换 PAT / 换口令时用，v2 格式）</summary>
+    <summary>🔧 生成 Token 密文串（首次部署 / 换 PAT / 换口令时用一次）</summary>
     <div class="form-group"><label>新 GitHub PAT（仅本机内存加密，不发送到任何地方）</label>
       <input type="password" id="genPat" placeholder="ghp_… 或 github_pat_…" autocomplete="off" /></div>
     <div class="form-group"><label>新口令（与上方发送口令一致）</label>
       <input type="password" id="genPwd" autocomplete="off" /></div>
     <div class="toolbar"><button type="button" class="mini-btn" id="btnGen">🔐 生成密文串</button></div>
-    <div class="form-group"><label>输出：替换到上方配置与源码 ENCRYPTED_TOKEN_BLOB</label>
+    <div class="form-group"><label>输出：填入源码顶部 ENCRYPTED_TOKEN_BLOB 后重新部署</label>
       <input type="text" id="genOut" readonly /></div>
   </details>
 
@@ -164,16 +147,13 @@
 
 <script>
 'use strict';
-// ===== 默认公开配置（部署时改这里）=====
-const DEFAULTS = {
-  owner: 'xct258',
-  repo: 'note-relay',
-  workflow: 'forward.yml',
-  // v1 老串（salt16|iv12|ct, PBKDF2 100k, 无用途隔离）——解密自动兼容；建议换成下方工具生成的 v2 串
-  blob: 'F4tLzy8hfpWN5rCSIPwD0RXBROZB9yRYQapZ4XcwnIb0WQCaw2DR+jOxRIOaM6Lmge+1goJWKbdndh7yZUe15o57Rfwm05etDJBuNm2xdjQu/sZElAqGt4Dw2Kv2b8YgPDuD39SZsUXuREuoD2fWPywvEkyNrakXOZNNWVPmyZE0TGjdf8dOzKs='
-};
-const V1_MARKER = 0x01;
-const PBKDF2_ITER_V2 = 310000; // OWASP PBKDF2-HMAC-SHA256 推荐值
+// ===== 固定配置（部署时改这里；就这一处，没有其他配置入口）=====
+const GH_OWNER = 'xct258';
+const GH_REPO = 'note-relay';
+const WORKFLOW_FILE = 'forward.yml';
+// Token 密文串：用页内生成工具或 tools/make_blob.py 生成后填入（只认 v2 信封）
+const ENCRYPTED_TOKEN_BLOB = '';
+const PBKDF2_ITER = 310000; // PBKDF2-HMAC-SHA256 迭代次数，前后端必须一致
 const MAX_PLAINTEXT = 1024 * 1024;      // 明文上限 1MB
 const WARN_B64_LEN = 28000;             // dispatch 输入实用上限预警
 const MAX_AGE_NOTE = '（后端 15 分钟防重放，见 forward.yml）';
@@ -191,28 +171,6 @@ $('themeBtn').onclick = () => {
   const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = next;
   localStorage.setItem('nr_theme', next); $('themeBtn').textContent = next === 'dark' ? '☀️' : '🌙';
-};
-
-// ---------- 配置 ----------
-function loadCfg() {
-  let c = {};
-  try { c = JSON.parse(localStorage.getItem('nr_cfg') || '{}'); } catch {}
-  $('cfgOwner').value = c.owner || DEFAULTS.owner;
-  $('cfgRepo').value = c.repo || DEFAULTS.repo;
-  $('cfgWorkflow').value = c.workflow || DEFAULTS.workflow;
-  $('cfgBlob').value = c.blob || DEFAULTS.blob;
-}
-function getCfg() {
-  return { owner: $('cfgOwner').value.trim() || DEFAULTS.owner,
-    repo: $('cfgRepo').value.trim() || DEFAULTS.repo,
-    workflow: $('cfgWorkflow').value.trim() || DEFAULTS.workflow,
-    blob: $('cfgBlob').value.trim() || DEFAULTS.blob };
-}
-$('btnSaveCfg').onclick = () => {
-  localStorage.setItem('nr_cfg', JSON.stringify(getCfg())); note('已保存配置到本机。', 'ok');
-};
-$('btnResetCfg').onclick = () => {
-  localStorage.removeItem('nr_cfg'); loadCfg(); note('已恢复默认配置。', 'ok');
 };
 
 // ---------- 口令强度 ----------
@@ -263,38 +221,22 @@ function b64decode(b64) {
 async function encryptEnvelope(plainText, password, purpose) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(password, salt, PBKDF2_ITER_V2, purpose);
+  const key = await deriveKey(password, salt, PBKDF2_ITER, purpose);
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(plainText)));
   const out = new Uint8Array(1 + 4 + 16 + 12 + ct.length);
-  out[0] = V1_MARKER; new DataView(out.buffer).setUint32(1, PBKDF2_ITER_V2);
+  out[0] = 0x01; new DataView(out.buffer).setUint32(1, PBKDF2_ITER);
   out.set(salt, 5); out.set(iv, 21); out.set(ct, 33);
   return b64encode(out);
 }
-// 解密：v2 信封优先；否则按 v1 老格式（先试用途隔离口令，再试裸口令，便于迁移）
+// 解密：只认 v2 信封（0x01 | iterations u32BE | salt16 | iv12 | ct），其他一律拒绝
 async function decryptEnvelope(encryptedBase64, password, purpose) {
   const raw = b64decode(encryptedBase64.replace(/\s+/g, ''));
-  if (raw.length > 33 && raw[0] === V1_MARKER) {
-    const it = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(1);
-    if (it < 100000 || it > 2000000) throw new Error('iterations 非法');
-    const salt = raw.slice(5, 21), iv = raw.slice(21, 33), ct = raw.slice(33);
-    const key = await deriveKey(password, salt, it, purpose);
-    return td.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct));
-  }
-  // ---- legacy v1: salt16 | iv12 | ct, PBKDF2 100k ----
-  const salt = raw.slice(0, 16), iv = raw.slice(16, 28), ct = raw.slice(28);
-  const tries = [purpose, null];
-  let last;
-  for (const p of tries) {
-    try {
-      const pwd = p ? scopedPassword(password, p) : password;
-      const km = await crypto.subtle.importKey('raw', te.encode(pwd), { name: 'PBKDF2' }, false, ['deriveKey']);
-      const key = await crypto.subtle.deriveKey(
-        { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, km,
-        { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
-      return td.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct));
-    } catch (e) { last = e; }
-  }
-  throw last || new Error('解密失败');
+  if (raw.length <= 33 || raw[0] !== 0x01) throw new Error('密文格式不支持，请重新生成 Token 密文串');
+  const it = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(1);
+  if (it !== PBKDF2_ITER) throw new Error('迭代次数不一致，请用当前版本工具重新生成');
+  const salt = raw.slice(5, 21), iv = raw.slice(21, 33), ct = raw.slice(33);
+  const key = await deriveKey(password, salt, it, purpose);
+  return td.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct));
 }
 function looksLikeToken(s) {
   return /^(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|fine-grained)/.test(s);
@@ -436,14 +378,14 @@ function note(msg, kind, htmlUrl) {
   }
 }
 
-// ---------- 生成 Token 密文（v2）----------
+// ---------- 生成 Token 密文 ----------
 $('btnGen').onclick = async () => {
   const pat = $('genPat').value.trim(), pwd = $('genPwd').value;
   if (!looksLikeToken(pat)) { note('PAT 格式看起来不对（应 ghp_ / github_pat_ 开头）。', 'err'); return; }
   if (!pwd) { note('请填写新口令。', 'err'); return; }
   try {
     $('genOut').value = await encryptEnvelope(pat, pwd, 'token');
-    note('已生成 v2 密文串，复制到上方配置并同步更新源码 DEFAULTS.blob。', 'ok');
+    note('已生成密文串，填入源码顶部 ENCRYPTED_TOKEN_BLOB 后重新部署。', 'ok');
   } catch (e) { note('生成失败：' + e.message, 'err'); }
   finally { $('genPat').value = ''; }
 };
@@ -459,13 +401,13 @@ async function gh(path, token, init) {
   }, init || {}));
   return r;
 }
-async function pollRun(cfg, token, since) {
+async function pollRun(token, since) {
   // 找到本次 dispatch 触发的 run，最多等 ~90s 拿 conclusion
   let run = null;
   for (let i = 0; i < 6 && !run; i++) {
     await new Promise(r => setTimeout(r, 3000));
     try {
-      const r = await gh(`/repos/${cfg.owner}/${cfg.repo}/actions/workflows/${cfg.workflow}/runs?event=workflow_dispatch&per_page=5`, token);
+      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=5`, token);
       if (!r.ok) return null;
       const j = await r.json();
       (j.workflow_runs || []).forEach(x => {
@@ -478,7 +420,7 @@ async function pollRun(cfg, token, since) {
     if (run.status === 'completed') return run;
     await new Promise(r => setTimeout(r, 5000));
     try {
-      const r = await gh(`/repos/${cfg.owner}/${cfg.repo}/actions/runs/${run.id}`, token);
+      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/runs/${run.id}`, token);
       if (!r.ok) return run;
       run = await r.json();
     } catch { return run; }
@@ -487,13 +429,13 @@ async function pollRun(cfg, token, since) {
 }
 
 async function processAndSend() {
-  const cfg = getCfg();
   const pwd = $('inputPass').value;
   const folder = $('folder').value.trim();
   let title = $('title').value.trim();
   const content = $('content').value;
   const btn = $('sendBtn');
 
+  if (!ENCRYPTED_TOKEN_BLOB) { note('尚未填入 Token 密文串：先用下方生成工具生成，填入源码顶部后重新部署。', 'err'); return; }
   if (!pwd) { note('请输入密钥口令！', 'err'); return; }
   if (!content.trim()) { note('正文内容不能为空！', 'err'); return; }
   if (te.encode(content).length > MAX_PLAINTEXT) { note('正文超过 1MB 上限，请拆分发送。', 'err'); return; }
@@ -507,14 +449,14 @@ async function processAndSend() {
   let realToken = '';
   const t0 = Date.now();
   try {
-    // 1) 本地解密 Token（v2 优先，v1 老串兼容）
+    // 1) 本地解密 Token
     try {
-      realToken = (await decryptEnvelope(cfg.blob, pwd, 'token')).trim();
+      realToken = (await decryptEnvelope(ENCRYPTED_TOKEN_BLOB, pwd, 'token')).trim();
       if (!looksLikeToken(realToken)) throw new Error('bad shape');
     } catch {
       throw new Error('口令错误，无法解密认证凭据！');
     }
-    // 2) 打包加密业务（用途隔离 purpose=payload，v2 信封）
+    // 2) 打包加密业务（用途隔离 purpose=payload）
     const payloadObj = JSON.stringify({
       v: 2, title, folder,
       content, overwrite: $('overwrite').checked,
@@ -527,7 +469,7 @@ async function processAndSend() {
 
     // 3) dispatch
     btn.textContent = '正在中转发送…';
-    const resp = await gh(`/repos/${cfg.owner}/${cfg.repo}/actions/workflows/${cfg.workflow}/dispatches`,
+    const resp = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
       realToken, {
         method: 'POST',
         headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${realToken}`, 'Content-Type': 'application/json' },
@@ -535,7 +477,7 @@ async function processAndSend() {
       });
     if (resp.status === 204) {
       btn.textContent = '已送达，正在查询后台同步状态…';
-      const run = await pollRun(cfg, realToken, t0);
+      const run = await pollRun(realToken, t0);
       const bytes = te.encode(content).length;
       const url = run && run.html_url;
       pushHist({ t: Date.now(), title, folder, bytes, url });
@@ -550,7 +492,7 @@ async function processAndSend() {
       let msg = `HTTP ${resp.status}`;
       try { const e = await resp.json(); msg = e.message || msg; } catch {}
       if (resp.status === 401) msg = 'Token 无效或已过期，请重新生成密文串（' + msg + '）';
-      else if (resp.status === 404) msg = '仓库/Workflow 不存在，检查配置与分支名（' + msg + '）';
+      else if (resp.status === 404) msg = '仓库/Workflow 不存在，检查源码顶部配置与分支名（' + msg + '）';
       else if (resp.status === 422) msg = '参数被拒（多为密文过大，请拆分正文）（' + msg + '）';
       else if (resp.status === 403) msg = '被限流或 Token 缺少 actions:write 权限（' + msg + '）';
       throw new Error(msg);
@@ -570,7 +512,7 @@ async function processAndSend() {
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') processAndSend();
 });
-initTheme(); loadCfg(); loadDraft(); loadHist(); updateCount();
+initTheme(); loadDraft(); loadHist(); updateCount();
 </script>
 </body>
 </html>

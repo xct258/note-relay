@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       payload:
-        description: '全量 Base64 密文包（v2 信封优先，兼容 v1 老包）'
+        description: '全量 Base64 密文包（v2 信封：0x01‖iterations‖salt‖iv‖ct）'
         required: true
 
 # 最小权限：本 job 不需要读写仓库内容
@@ -39,36 +39,27 @@ jobs:
           from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
           from cryptography.hazmat.primitives import hashes
 
+          PBKDF2_ITER = 310000  # 必须与 index.html 的 PBKDF2_ITER 一致
+
           def derive(password: bytes, salt: bytes, it: int) -> bytes:
               kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=it)
               return kdf.derive(password)
 
-          def scoped(password: str, purpose: str | None) -> bytes:
+          def scoped(password: str, purpose: str) -> bytes:
               # 与前端 scopedPassword 对齐：password + \x00 + note-relay/<purpose>
-              if purpose is None:
-                  return password.encode()
               return (password + "\x00" + "note-relay/" + purpose).encode()
 
           def decrypt_envelope(b64: str, password: str, purpose: str) -> str:
+              # 只认 v2 信封：0x01 | iterations u32BE | salt16 | iv12 | ct
               raw = base64.b64decode(b64.strip())
-              # v2: 0x01 | iterations u32BE | salt16 | iv12 | ct
-              if len(raw) > 33 and raw[0] == 0x01:
-                  it = int.from_bytes(raw[1:5], "big")
-                  if not (100000 <= it <= 2000000):
-                      raise ValueError(f"iterations 非法: {it}")
-                  salt, iv, ct = raw[5:21], raw[21:33], raw[33:]
-                  key = derive(scoped(password, purpose), salt, it)
-                  return AESGCM(key).decrypt(iv, ct, None).decode("utf-8")
-              # v1 legacy: salt16 | iv12 | ct, PBKDF2 100k（先试用途隔离，再试裸口令）
-              salt, iv, ct = raw[:16], raw[16:28], raw[28:]
-              last = None
-              for p in (purpose, None):
-                  try:
-                      key = derive(scoped(password, p), salt, 100000)
-                      return AESGCM(key).decrypt(iv, ct, None).decode("utf-8")
-                  except Exception as e:
-                      last = e
-              raise last
+              if len(raw) <= 33 or raw[0] != 0x01:
+                  raise ValueError("密文格式不支持（只认 v2 信封）")
+              it = int.from_bytes(raw[1:5], "big")
+              if it != PBKDF2_ITER:
+                  raise ValueError(f"迭代次数不一致: {it}，请用当前版本工具重新生成")
+              salt, iv, ct = raw[5:21], raw[21:33], raw[33:]
+              key = derive(scoped(password, purpose), salt, it)
+              return AESGCM(key).decrypt(iv, ct, None).decode("utf-8")
 
           password = os.environ["PASSWORD"]
           data = json.loads(decrypt_envelope(os.environ["ENCRYPTED_PAYLOAD"], password, "payload"))

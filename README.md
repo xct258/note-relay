@@ -12,38 +12,27 @@
 [forward.yml @ Actions] 解密 → 校验时间戳/文件名 → curl PUT WebDAV
 ```
 
-## 加密格式
+## 加密格式（只有 v2，不兼容老格式）
 
-* v2 信封：`0x01 ‖ iterations u32BE ‖ salt16 ‖ iv12 ‖ AES-GCM-256(ct+tag)`，整体 base64。
-  PBKDF2-HMAC-SHA256 **310000 次**，口令按用途隔离：`password + \x00 + note-relay/<token|payload>`。
-* v1 兼容读取：`salt16 ‖ iv12 ‖ ct`，PBKDF2 100k（先试隔离口令，再试裸口令）。**新生成的一律用 v2**；
-  建议用页面内「重新生成 Token 密文串」工具把 `ENCRYPTED_TOKEN_BLOB` 换成 v2。
+信封：`0x01 ‖ iterations u32BE ‖ salt16 ‖ iv12 ‖ AES-GCM-256(ct+tag)`，整体 base64。
+PBKDF2-HMAC-SHA256 **310000 次**（`PBKDF2_ITER`，三处必须一致：`index.html` / `forward.yml` / `tools/make_blob.py`），
+口令按用途隔离：`password + \x00 + note-relay/<token|payload>`。
+迭代次数对不上或非 `0x01` 开头，前后端一律拒绝并提示重新生成。
 
 ## 部署
 
-1. **PAT**：新建 fine-grained token，仅授目标仓库 `Actions: Read and write`，有效期尽量短。
-   用页面工具（或下述脚本）以你的口令加密 PAT，得到密文串，填入 `index.html` 的 `DEFAULTS.blob`。
+1. **生成 Token 密文串**：`ENCRYPTED_TOKEN_BLOB` 在源码顶部固定写死，空着无法发送。
+   用页面内生成工具，或离线脚本（等价，PAT 不进 shell 历史）：
+   ```bash
+   read -s GHPAT && read -s PWD && python3 tools/make_blob.py --purpose token
+   ```
+   输出填入 `index.html` 顶部的 `ENCRYPTED_TOKEN_BLOB`。PAT 用 fine-grained token，
+   仓库只选本仓，权限 `Actions: Read and write`，有效期尽量短。
 2. **Secrets**（仓库 Settings → Secrets and variables → Actions）：
    `DECRYPT_PASSWORD`（与发送口令一致）、`WEBDAV_URL`（以 `/` 结尾，如 `https://dav.example.com/notes/`）、
    `WEBDAV_USER`、`WEBDAV_PASSWORD`。
 3. **Pages**：从 `main` 分支发布根目录 `index.html`。
-4. **分支**：dispatch 默认 `ref: main`，换分支请同步改前端。
-
-离线生成密文串（等价于页内工具，避免把 PAT 贴进浏览器）：
-
-```python
-import os, base64
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
-pwd, pat, purpose = "你的口令", "ghp_xxx", "token"
-salt, iv = os.urandom(16), os.urandom(12)
-kdf = PBKDF2HMAC(hashes.SHA256(), 32, salt, 310000)
-key = kdf.derive((pwd + "\x00note-relay/" + purpose).encode())
-ct = AESGCM(key).encrypt(iv, pat.encode(), None)
-blob = bytes([1]) + (310000).to_bytes(4, "big") + salt + iv + ct
-print(base64.b64encode(blob).decode())
-```
+4. **分支**：dispatch 默认 `ref: main`；仓库、分支、文件名全固定在源码顶部，改部署只改那一处。
 
 ## 前端功能（index.html，零构建单文件）
 
@@ -52,7 +41,8 @@ print(base64.b64encode(blob).decode())
 * 草稿自动保存（localStorage **明文**，仅本机）、一键插入模板/清空草稿
 * 文件夹 + 标题 + 覆盖开关 + 空标题按日期自动命名；密文过大（~28KB）预警
 * dispatch 后轮询 Actions 运行状态，给出结论与运行记录链接；本机历史（20 条，只存标题/时间/大小）
-* 明暗主题、仓库配置页内可改（存 localStorage）、Token 密文 v2 生成器
+* 明暗主题、本机历史（20 条，只存标题/时间/大小）
+* Token 密文生成器（页内）+ `tools/make_blob.py`（离线等价实现）
 
 ## 后端行为（forward.yml）
 
@@ -75,5 +65,6 @@ print(base64.b64encode(blob).decode())
 
 | 文件 | 说明 |
 |---|---|
-| `index.html` | 前端全部逻辑 |
+| `index.html` | 前端全部逻辑（配置全在顶部常量，无其他入口） |
 | `.github/workflows/forward.yml` | 解密 + 校验 + WebDAV 上传 |
+| `tools/make_blob.py` | 离线生成 `ENCRYPTED_TOKEN_BLOB` |
