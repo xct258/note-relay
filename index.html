@@ -25,7 +25,8 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: var(--bg); color: var(--fg); }
     header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    h2 { margin: 0 0 18px; font-size: 20px; }
+    h2 { margin: 0; font-size: 20px; }
+    .head-actions { display: flex; gap: 8px; }
     .row { display: flex; gap: 10px; } .row > * { flex: 1; }
     .form-group { margin-bottom: 14px; }
     label { display: block; font-weight: 600; margin-bottom: 6px; font-size: 13px; }
@@ -44,11 +45,10 @@
     .toolbar button.active { border-color: var(--accent); color: var(--accent); }
     .ghost-btn { background: transparent; border: 1px solid var(--border); border-radius: 6px;
       padding: 7px 12px; font-size: 13px; cursor: pointer; color: var(--fg); }
-    #sendBtn {
-      width: 100%; padding: 12px; background: var(--btn); color: #fff; border: none;
+    .primary-btn { width: 100%; padding: 12px; background: var(--btn); color: #fff; border: none;
       border-radius: 6px; font-size: 15px; font-weight: 700; cursor: pointer; }
-    #sendBtn:hover:not(:disabled) { background: var(--btn-hover); }
-    #sendBtn:disabled { opacity: .6; cursor: not-allowed; }
+    .primary-btn:hover:not(:disabled) { background: var(--btn-hover); }
+    .primary-btn:disabled { opacity: .6; cursor: not-allowed; }
     #notice { margin-top: 14px; padding: 12px; border-radius: 6px; display: none; font-size: 14px;
       line-height: 1.6; word-break: break-word; }
     #preview { border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px;
@@ -59,58 +59,86 @@
     .stats { font-size: 12px; color: var(--muted); margin-top: 6px; }
     .pwd-wrap { position: relative; }
     .pwd-wrap .ghost-btn { position: absolute; right: 6px; top: 6px; padding: 4px 10px; }
+    .lock-card { max-width: 380px; margin: 12vh auto 0; text-align: center;
+      border: 1px solid var(--border); border-radius: 12px; padding: 28px 24px; background: var(--panel); }
+    .lock-emoji { font-size: 34px; }
+    .lock-tip { font-size: 14px; color: var(--muted); margin: 8px 0 18px; }
+    #lockMsg { margin-top: 12px; min-height: 18px; font-size: 13px; }
+    .doc-list { list-style: none; padding: 0; margin: 8px 0 0; }
+    .doc-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 8px 2px; border-bottom: 1px dashed var(--border); font-size: 13px; }
+    .doc-list .empty { justify-content: center; color: var(--muted); border: none; }
+    .doc-name { cursor: pointer; color: var(--accent); word-break: break-all; }
+    .doc-name:hover { text-decoration: underline; }
+    .doc-side { color: var(--muted); font-size: 12px; white-space: nowrap; }
     @media (max-width: 640px) { .row { flex-direction: column; } textarea { height: 300px; } }
   </style>
 </head>
 <body>
   <header>
     <h2>📝 极简云笔记</h2>
-    <button class="ghost-btn" id="themeBtn" title="切换明暗">🌙</button>
+    <div class="head-actions">
+      <button class="ghost-btn" id="lockBtn" title="锁定" style="display:none">🔒 锁定</button>
+      <button class="ghost-btn" id="themeBtn" title="切换明暗">🌙</button>
+    </div>
   </header>
 
-  <div class="form-group">
-    <label>🔑 同步密码</label>
-    <div class="pwd-wrap">
-      <input type="password" id="inputPass" placeholder="输入同步密码" autocomplete="off" />
-      <button class="ghost-btn" id="togglePwd" type="button">显示</button>
+  <section id="lockView">
+    <div class="lock-card">
+      <div class="lock-emoji">🔒</div>
+      <p class="lock-tip">请输入同步密码以访问笔记</p>
+      <div class="pwd-wrap">
+        <input type="password" id="unlockPass" placeholder="同步密码" autocomplete="off" />
+        <button class="ghost-btn" id="togglePwd" type="button">显示</button>
+      </div>
+      <button class="primary-btn" id="unlockBtn" style="margin-top:14px">解锁</button>
+      <div id="lockMsg"></div>
     </div>
-    <div class="stats" id="draftState">草稿：未加载</div>
-  </div>
+  </section>
 
-  <div class="row">
-    <div class="form-group">
-      <label>📁 仓库子目录 <span class="hint">可选，如 notes/2026/09</span></label>
-      <input type="text" id="folder" placeholder="notes" autocomplete="off" />
+  <section id="appView" style="display:none">
+    <div class="row">
+      <div class="form-group">
+        <label>📁 仓库子目录 <span class="hint">可选，如 notes/2026/09</span></label>
+        <input type="text" id="folder" placeholder="notes" autocomplete="off" />
+      </div>
+      <div class="form-group">
+        <label>📄 笔记标题</label>
+        <input type="text" id="title" placeholder="例如：2026-09-25-备忘.md" />
+      </div>
     </div>
-    <div class="form-group">
-      <label>📄 笔记标题</label>
-      <input type="text" id="title" placeholder="例如：2026-09-25-备忘.md" />
+
+    <div class="toolbar">
+      <button type="button" id="tabEdit" class="active">✏️ 编辑</button>
+      <button type="button" id="tabPreview">👁️ 预览</button>
+      <span style="flex:1"></span>
+      <button type="button" id="btnTemplate" class="mini-btn">📝 插入模板</button>
+      <button type="button" id="btnClearDraft" class="mini-btn">🧹 清草稿</button>
     </div>
-  </div>
+    <div class="form-group" style="margin-bottom:6px">
+      <textarea id="content" placeholder="输入 Markdown 正文…"></textarea>
+      <div id="preview"></div>
+    </div>
+    <div class="stats" id="countState">0 字 · 0 行 · 约 0 分钟</div>
 
-  <div class="toolbar">
-    <button type="button" id="tabEdit" class="active">✏️ 编辑</button>
-    <button type="button" id="tabPreview">👁️ 预览</button>
-    <span style="flex:1"></span>
-    <button type="button" id="btnTemplate" class="mini-btn">📝 插入模板</button>
-    <button type="button" id="btnClearDraft" class="mini-btn">🧹 清草稿</button>
-  </div>
-  <div class="form-group" style="margin-bottom:6px">
-    <textarea id="content" placeholder="输入 Markdown 正文…"></textarea>
-    <div id="preview"></div>
-  </div>
-  <div class="stats" id="countState">0 字 · 0 行 · 约 0 分钟</div>
+    <div class="form-group" style="margin-top:12px">
+      <label style="font-weight:400;font-size:13px">
+        <input type="checkbox" id="overwrite" checked style="width:auto" /> 允许覆盖仓库同名文件（取消则同名跳过）
+        &nbsp;·&nbsp;
+        <input type="checkbox" id="autoDate" checked style="width:auto" /> 空标题自动按日期命名
+      </label>
+    </div>
 
-  <div class="form-group" style="margin-top:12px">
-    <label style="font-weight:400;font-size:13px">
-      <input type="checkbox" id="overwrite" checked style="width:auto" /> 允许覆盖仓库同名文件（取消则同名跳过）
-      &nbsp;·&nbsp;
-      <input type="checkbox" id="autoDate" checked style="width:auto" /> 空标题自动按日期命名
-    </label>
-  </div>
+    <button class="primary-btn" id="sendBtn" onclick="processAndSend()">保存到仓库</button>
+    <div id="notice"></div>
 
-  <button id="sendBtn" onclick="processAndSend()">保存到仓库</button>
-  <div id="notice"></div>
+    <div class="form-group" id="docsPanel" style="margin-top:22px">
+      <label>📚 仓库文档 <span class="hint" id="docsCount">加载中…</span>
+        <button type="button" class="mini-btn" id="btnReloadDocs" style="float:right">刷新</button>
+      </label>
+      <ul id="docList" class="doc-list"></ul>
+    </div>
+  </section>
 
 <script>
 'use strict';
@@ -120,12 +148,14 @@ const GH_REPO = 'note-relay';
 const GH_BRANCH = 'main';
 // 同步凭证：固定写死在此，页面不提供任何修改入口
 const SYNC_CREDENTIAL = 'AQAEuvCfr4FcbTM+Uep1vgo+qmAPinw8Is8GkTLeL4Jdb7JkGbYqROi3hLDbjAZPxem6O7nnNl7NtPqmF32zCx7JFZYzA10nTyTgXVkuBcxJLqFN9JHWqU3Z0WhEx1SMgqQN4EOSFTtaNErbbTSzaHu92ROzpe5x7xHY+7s3pjjb86/htLZlhlNeU+E0LA==';
-const PBKDF2_ITER = 310000; // 安全参数，前后端必须一致
+const PBKDF2_ITER = 310000; // 安全参数
 const COOLDOWN_SEC = 60; // 成功保存后按钮冷却秒数（防误触连点）
 const MAX_PLAINTEXT = 1024 * 1024;      // 正文上限 1MB（GitHub Contents API 约 1MB 上限）
 
 const $ = id => document.getElementById(id);
 const te = new TextEncoder(), td = new TextDecoder();
+let syncCred = '';   // 解锁后驻留内存的访问凭证
+let docCache = [];   // 文档列表
 
 // ---------- 主题 ----------
 function initTheme() {
@@ -140,7 +170,7 @@ $('themeBtn').onclick = () => {
 };
 
 $('togglePwd').onclick = () => {
-  const i = $('inputPass');
+  const i = $('unlockPass');
   i.type = i.type === 'password' ? 'text' : 'password';
   $('togglePwd').textContent = i.type === 'password' ? '显示' : '隐藏';
 };
@@ -151,7 +181,7 @@ async function makeKey(password, salt, iterations, purpose) {
   const km = await crypto.subtle.importKey('raw', te.encode(scopePass(password, purpose)),
     { name: 'PBKDF2' }, false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
-    km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    km, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
 }
 function b64encode(u8) {
   let s = ''; const CH = 0x8000;
@@ -177,6 +207,156 @@ function looksLikeCredential(s) {
   return /^(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|fine-grained)/.test(s);
 }
 
+// ---------- HTTP ----------
+function ghHeaders(cred) {
+  return { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${cred}`, 'Content-Type': 'application/json' };
+}
+async function gh(path, cred, init) {
+  return fetch(`https://api.github.com${path}`, Object.assign({
+    headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${cred}` }
+  }, init || {}));
+}
+async function errMsg(resp) {
+  try { const e = await resp.json(); return e.message || `HTTP ${resp.status}`; }
+  catch { return `HTTP ${resp.status}`; }
+}
+function netErr(e) {
+  return /Failed to fetch|NetworkError|Load failed|CORS/i.test(e.message || '')
+    ? '网络/CORS 失败：请确认网络可访问 api.github.com，或换网络重试。' : e.message;
+}
+
+// ---------- 解锁 / 锁定 ----------
+async function getCred(pwd) {
+  const cred = (await unpackEnvelope(SYNC_CREDENTIAL, pwd, 'token')).trim();
+  if (!looksLikeCredential(cred)) throw new Error('bad shape');
+  return cred;
+}
+async function unlock() {
+  const pwd = $('unlockPass').value;
+  if (!pwd) { $('lockMsg').textContent = '请输入同步密码'; return; }
+  const btn = $('unlockBtn');
+  btn.disabled = true; btn.textContent = '解锁中…'; $('lockMsg').textContent = '';
+  try {
+    syncCred = await getCred(pwd);
+    $('unlockPass').value = '';
+    $('lockView').style.display = 'none';
+    $('appView').style.display = '';
+    $('lockBtn').style.display = '';
+    await loadDocs();
+  } catch {
+    syncCred = '';
+    $('lockMsg').textContent = '密码错误，无法访问';
+  } finally {
+    btn.disabled = false; btn.textContent = '解锁';
+  }
+}
+function lock() {
+  syncCred = ''; docCache = [];
+  renderDocs();
+  $('appView').style.display = 'none';
+  $('lockView').style.display = '';
+  $('lockBtn').style.display = 'none';
+  $('lockMsg').textContent = '';
+  $('unlockPass').focus();
+}
+$('unlockBtn').onclick = unlock;
+$('lockBtn').onclick = lock;
+$('unlockPass').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
+
+// ---------- 文档列表 / 打开 / 删除 ----------
+async function loadDocs() {
+  if (!syncCred) return;
+  const btn = $('btnReloadDocs');
+  $('docsCount').textContent = '加载中…'; btn.disabled = true;
+  try {
+    const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/git/trees/${GH_BRANCH}?recursive=1`, syncCred);
+    if (r.status === 401) throw new Error('凭证已失效，请重新解锁');
+    if (!r.ok) throw new Error(await errMsg(r));
+    const tree = await r.json();
+    docCache = (tree.tree || []).filter(x =>
+      x.type === 'blob' && /\.md$/i.test(x.path) &&
+      !x.path.startsWith('.github/') && !x.path.startsWith('tools/') &&
+      x.path !== 'README.md' && !x.path.endsWith('/README.md'));
+    renderDocs();
+  } catch (e) {
+    $('docsCount').textContent = '加载失败';
+    note('❌ 加载文档失败：' + netErr(e), 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+function renderDocs() {
+  const ul = $('docList');
+  ul.innerHTML = '';
+  $('docsCount').textContent = docCache.length ? `共 ${docCache.length} 篇` : '暂无文档';
+  if (!docCache.length) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = '还没有文档，写一篇保存试试';
+    ul.appendChild(li);
+    return;
+  }
+  docCache.slice().sort((a, b) => a.path.localeCompare(b.path)).forEach(item => {
+    const li = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'doc-name';
+    name.textContent = item.path;
+    name.title = `点击编辑 · ${item.size} B`;
+    name.onclick = () => openDoc(item);
+    li.appendChild(name);
+    const side = document.createElement('span');
+    side.className = 'doc-side';
+    side.textContent = formatSize(item.size);
+    li.appendChild(side);
+    const del = document.createElement('button');
+    del.type = 'button'; del.className = 'mini-btn'; del.textContent = '删除';
+    del.onclick = () => deleteDoc(item);
+    li.appendChild(del);
+    ul.appendChild(li);
+  });
+}
+function formatSize(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+async function openDoc(item) {
+  if (!syncCred) { note('请先解锁。', 'err'); return; }
+  try {
+    const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${apiPath(item.path)}?ref=${GH_BRANCH}`, syncCred);
+    if (!r.ok) throw new Error(await errMsg(r));
+    const info = await r.json();
+    if (Array.isArray(info) || info.type !== 'file') throw new Error('目标不是文件');
+    if (!info.content || info.encoding !== 'base64') throw new Error('文件过大，无法在页面打开');
+    $('content').value = td.decode(b64decode(info.content.replace(/\s/g, '')));
+    const parts = item.path.split('/'); const file = parts.pop();
+    $('folder').value = parts.join('/'); $('title').value = file;
+    updateCount(); refreshPreview(); saveDraft();
+    switchTab('edit');
+    $('content').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    note(`已打开 ${item.path}，修改后点「保存到仓库」即可覆盖。`, 'ok');
+  } catch (e) {
+    note('❌ 打开失败：' + netErr(e), 'err');
+  }
+}
+async function deleteDoc(item) {
+  if (!syncCred) { note('请先解锁。', 'err'); return; }
+  if (!confirm(`确认删除「${item.path}」？会在仓库产生一次删除提交。`)) return;
+  try {
+    const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${apiPath(item.path)}`, syncCred, {
+      method: 'DELETE',
+      headers: ghHeaders(syncCred),
+      body: JSON.stringify({ message: `删除笔记：${item.path}`, sha: item.sha, branch: GH_BRANCH })
+    });
+    if (!(r.status === 200 || r.status === 202 || r.status === 204)) throw new Error(await errMsg(r));
+    note(`✅ 已删除 ${item.path}`, 'ok');
+    await loadDocs();
+  } catch (e) {
+    note('❌ 删除失败：' + netErr(e), 'err');
+  }
+}
+$('btnReloadDocs').onclick = loadDocs;
+
 // ---------- 轻量 Markdown 预览（先转义防 XSS）----------
 function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -185,11 +365,7 @@ function escHtml(s) {
 function mdRender(src) {
   const lines = escHtml(src).split('\n');
   let html = '', inCode = false, inList = false, para = [];
-  const flushPara = () => {
-    if (para.length) {
-      html += '<p>' + inline(para.join(' ')) + '</p>'; para = [];
-    }
-  };
+  const flushPara = () => { if (para.length) { html += '<p>' + inline(para.join(' ')) + '</p>'; para = []; } };
   const inline = s => s
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
@@ -203,32 +379,27 @@ function mdRender(src) {
     }
     if (inCode) { html += ln + '\n'; continue; }
     const h = ln.match(/^(#{1,4})\s+(.*)/);
-    if (h) {
-      flushPara(); if (inList) { html += '</ul>'; inList = false; }
-      html += `<h${h[1].length + 2}>${inline(h[2])}</h${h[1].length + 2}>`; continue;
-    }
+    if (h) { flushPara(); if (inList) { html += '</ul>'; inList = false; }
+      html += `<h${h[1].length + 2}>${inline(h[2])}</h${h[1].length + 2}>`; continue; }
     if (/^\s*---+\s*$/.test(ln)) { flushPara(); html += '<hr>'; continue; }
     if (/^\s*>\s?/.test(ln)) { flushPara(); html += `<blockquote>${inline(ln.replace(/^\s*>\s?/, ''))}</blockquote>`; continue; }
     const li = ln.match(/^\s*[-*+]\s+(.*)/);
-    if (li) {
-      flushPara(); if (!inList) { html += '<ul>'; inList = true; }
-      html += `<li>${inline(li[1])}</li>`; continue;
-    }
+    if (li) { flushPara(); if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
     if (/^\s*$/.test(ln)) { flushPara(); if (inList) { html += '</ul>'; inList = false; } continue; }
     para.push(ln.trim());
   }
   flushPara(); if (inList) html += '</ul>'; if (inCode) html += '</code></pre>';
   return html || '<p style="color:var(--muted)">（空）</p>';
 }
-$('tabEdit').onclick = () => {
-  $('tabEdit').classList.add('active'); $('tabPreview').classList.remove('active');
-  $('content').style.display = 'block'; $('preview').style.display = 'none';
-};
-$('tabPreview').onclick = () => {
-  $('tabPreview').classList.add('active'); $('tabEdit').classList.remove('active');
-  $('preview').innerHTML = mdRender($('content').value);
-  $('content').style.display = 'none'; $('preview').style.display = 'block';
-};
+function switchTab(which) {
+  const edit = which === 'edit';
+  $('tabEdit').classList.toggle('active', edit); $('tabPreview').classList.toggle('active', !edit);
+  $('content').style.display = edit ? 'block' : 'none';
+  if (edit) { $('preview').style.display = 'none'; }
+  else { $('preview').innerHTML = mdRender($('content').value); $('preview').style.display = 'block'; }
+}
+$('tabEdit').onclick = () => switchTab('edit');
+$('tabPreview').onclick = () => switchTab('preview');
 
 // ---------- 字数 / 草稿 / 模板 ----------
 function updateCount() {
@@ -240,20 +411,18 @@ function refreshPreview() {
   if ($('preview').style.display === 'block') $('preview').innerHTML = mdRender($('content').value);
 }
 let draftTimer = null;
-function saveDraft(silent) {
+function saveDraft() {
   localStorage.setItem('nr_draft', JSON.stringify({
     title: $('title').value, folder: $('folder').value, content: $('content').value,
     overwrite: $('overwrite').checked, updatedAt: Date.now()
   }));
-  if (!silent) $('draftState').textContent = '草稿：已保存 ' + new Date().toLocaleTimeString();
 }
 function loadDraft() {
   try {
     const d = JSON.parse(localStorage.getItem('nr_draft') || 'null');
-    if (!d) { $('draftState').textContent = '草稿：无（仅存本机，注意隐私电脑使用）'; return; }
+    if (!d) return;
     $('title').value = d.title || ''; $('folder').value = d.folder || '';
     $('content').value = d.content || ''; $('overwrite').checked = d.overwrite !== false;
-    $('draftState').textContent = '草稿：已恢复（' + new Date(d.updatedAt).toLocaleString() + '，仅存本机）';
     updateCount();
   } catch { /* ignore */ }
 }
@@ -262,18 +431,18 @@ function loadDraft() {
     updateCount();
     clearTimeout(draftTimer); draftTimer = setTimeout(() => saveDraft(), 1500);
   }));
-$('overwrite').addEventListener('change', () => saveDraft(true));
+$('overwrite').addEventListener('change', () => saveDraft());
 $('btnClearDraft').onclick = () => {
   localStorage.removeItem('nr_draft');
   $('title').value = ''; $('folder').value = ''; $('content').value = '';
   $('overwrite').checked = true; updateCount(); refreshPreview();
-  $('draftState').textContent = '草稿：已清空'; note('草稿已清空。', 'ok');
+  note('草稿已清空。', 'ok');
 };
 $('btnTemplate').onclick = () => {
   const d = new Date(), pad = n => String(n).padStart(2, '0');
   const tpl = `# ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} 记录\n\n## 待办\n\n- [ ] \n\n## 记录\n\n\n> 同步时间：${d.toLocaleString()}\n`;
   $('content').value = ($('content').value ? $('content').value.replace(/\s+$/, '') + '\n\n' : '') + tpl;
-  updateCount(); saveDraft(true);
+  updateCount(); saveDraft();
 };
 
 // ---------- 提示 ----------
@@ -282,8 +451,7 @@ function note(msg, kind) {
   n.style.display = 'block';
   n.style.background = kind === 'ok' ? 'var(--ok-bg)' : kind === 'warn' ? 'var(--warn-bg)' : 'var(--err-bg)';
   n.style.color = kind === 'ok' ? 'var(--ok-fg)' : kind === 'warn' ? 'var(--warn-fg)' : 'var(--err-fg)';
-  n.innerHTML = '';
-  n.appendChild(document.createTextNode(msg));
+  n.textContent = msg;
 }
 
 // ---------- 保存冷却（仅成功后的防误触冷却）----------
@@ -301,24 +469,13 @@ function startCooldown(sec) {
       btn.disabled = true; btn.textContent = `冷却中（${left}s 后可重发）`;
     }
   };
-  tick();
-  cooldownTimer = setInterval(tick, 500);
+  tick(); cooldownTimer = setInterval(tick, 500);
 }
 
-// ---------- 主流程：直接写入仓库文件 ----------
+// ---------- 路径处理 ----------
 function autoTitle() {
   const d = new Date(), pad = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.md`;
-}
-async function gh(path, cred, init) {
-  const r = await fetch(`https://api.github.com${path}`, Object.assign({
-    headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${cred}` }
-  }, init || {}));
-  return r;
-}
-async function errMsg(resp) {
-  try { const e = await resp.json(); return e.message || `HTTP ${resp.status}`; }
-  catch { return `HTTP ${resp.status}`; }
 }
 function cleanSeg(s, maxLen) {
   let t = s.replace(/[\0-\x1f\x7f]/g, '').trim().replace(/^\.+/, '');
@@ -339,16 +496,16 @@ function buildRepoPath(folder, title) {
 function apiPath(repoPath) {
   return repoPath.split('/').map(encodeURIComponent).join('/');
 }
+
+// ---------- 保存到仓库 ----------
 async function processAndSend() {
-  const pwd = $('inputPass').value;
+  if (!syncCred) { lock(); $('lockMsg').textContent = '登录已失效，请重新解锁'; return; }
   const folder = $('folder').value.trim();
   let title = $('title').value.trim();
   const content = $('content').value;
   const btn = $('sendBtn');
 
-  if (btn.disabled) return; // 防重复触发
-  if (!SYNC_CREDENTIAL) { note('同步凭证缺失，请联系管理员。', 'err'); return; }
-  if (!pwd) { note('请输入同步密码！', 'err'); return; }
+  if (btn.disabled) return;
   if (!content.trim()) { note('正文内容不能为空！', 'err'); return; }
   if (te.encode(content).length > MAX_PLAINTEXT) { note('正文超过 1MB 上限，请拆分保存。', 'err'); return; }
   if (!title && $('autoDate').checked) { title = autoTitle(); $('title').value = title; }
@@ -358,20 +515,10 @@ async function processAndSend() {
   btn.textContent = '正在保存…';
   note('正在处理…', 'warn');
 
-  let syncCred = '';
   let saved = false;
   try {
-    // 1) 读取同步凭证
-    try {
-      syncCred = (await unpackEnvelope(SYNC_CREDENTIAL, pwd, 'token')).trim();
-      if (!looksLikeCredential(syncCred)) throw new Error('bad shape');
-    } catch {
-      throw new Error('密码错误，保存失败！');
-    }
-    // 2) 规范仓库路径
     const repoPath = buildRepoPath(folder, title);
     const url = `/repos/${GH_OWNER}/${GH_REPO}/contents/${apiPath(repoPath)}`;
-    // 3) 查是否已存在（拿 sha，用于覆盖或判重）
     btn.textContent = '正在检查文件…';
     let sha = null;
     const get = await gh(`${url}?ref=${GH_BRANCH}`, syncCred);
@@ -380,35 +527,28 @@ async function processAndSend() {
       if (Array.isArray(info)) throw new Error('目标路径已被同名目录占用，请换标题');
       if (!info || info.type !== 'file' || !info.sha) throw new Error('目标路径已存在且不是文件，请换标题');
       sha = info.sha;
+    } else if (get.status === 401) {
+      throw new Error('凭证已失效，请重新解锁');
     } else if (get.status !== 404) {
       throw new Error('检查文件失败（' + await errMsg(get) + '）');
     }
     if (sha && !$('overwrite').checked) throw new Error('文件已存在，且未允许覆盖');
 
-    // 4) 创建或更新文件（Contents API 用 PUT）
     btn.textContent = '正在写入仓库…';
-    const body = {
-      message: `同步笔记：${repoPath}`,
-      content: b64encode(te.encode(content)),
-      branch: GH_BRANCH
-    };
+    const body = { message: `同步笔记：${repoPath}`, content: b64encode(te.encode(content)), branch: GH_BRANCH };
     if (sha) body.sha = sha;
-    const resp = await gh(url, syncCred, {
-      method: 'PUT',
-      headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${syncCred}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    const resp = await gh(url, syncCred, { method: 'PUT', headers: ghHeaders(syncCred), body: JSON.stringify(body) });
     if (resp.status === 200 || resp.status === 201) {
       saved = true;
       note(`✅ 保存成功！已写入仓库 ${repoPath}`, 'ok');
-      $('content').value = ''; updateCount(); refreshPreview(); saveDraft(true);
-      $('inputPass').value = '';
+      $('content').value = ''; updateCount(); refreshPreview(); saveDraft();
+      await loadDocs();
     } else if (resp.status === 409) {
       throw new Error('文件刚被他人改动，请重试（' + await errMsg(resp) + '）');
     } else if (resp.status === 422) {
       throw new Error('写入被拒：路径非法或内容超限（' + await errMsg(resp) + '）');
     } else if (resp.status === 401) {
-      throw new Error('同步凭证无效或已过期，请联系管理员更新（' + await errMsg(resp) + '）');
+      throw new Error('凭证已失效，请重新解锁（' + await errMsg(resp) + '）');
     } else if (resp.status === 403) {
       throw new Error('被限流或凭证缺少 Contents 读写权限（' + await errMsg(resp) + '）');
     } else if (resp.status === 404) {
@@ -417,12 +557,8 @@ async function processAndSend() {
       throw new Error('保存失败（' + await errMsg(resp) + '）');
     }
   } catch (err) {
-    const m = /Failed to fetch|NetworkError|Load failed|CORS/i.test(err.message || '')
-      ? '网络/CORS 失败：请确认网络可访问 api.github.com，或换网络重试。'
-      : err.message;
-    note(`❌ ${m}`, 'err');
+    note(`❌ ${netErr(err)}`, 'err');
   } finally {
-    syncCred = ''; // 清理临时数据
     btn.textContent = '保存到仓库';
     if (saved) startCooldown(COOLDOWN_SEC);
     else btn.disabled = false;
@@ -430,7 +566,7 @@ async function processAndSend() {
 }
 
 document.addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') processAndSend();
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && $('appView').style.display !== 'none') processAndSend();
 });
 initTheme(); loadDraft(); updateCount();
 </script>
