@@ -57,8 +57,6 @@
     #preview pre { background: var(--code-bg); padding: 10px; border-radius: 6px; overflow: auto; }
     #preview code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 13px; }
     #preview pre code { background: none; padding: 0; }
-    .meter { height: 6px; border-radius: 3px; background: var(--panel); border: 1px solid var(--border); overflow: hidden; margin-top: 6px; }
-    .meter > div { height: 100%; width: 0; transition: width .2s; }
     .stats { font-size: 12px; color: var(--muted); margin-top: 6px; }
     kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 12px; background: var(--panel); }
     .pwd-wrap { position: relative; }
@@ -77,12 +75,11 @@
   </div>
 
   <div class="form-group">
-    <label>🔑 同步密码 <span class="hint" id="pwdHint">— 未输入</span></label>
+    <label>🔑 同步密码</label>
     <div class="pwd-wrap">
       <input type="password" id="inputPass" placeholder="输入同步密码" autocomplete="off" />
       <button class="ghost-btn" id="togglePwd" type="button">显示</button>
     </div>
-    <div class="meter"><div id="pwdBar"></div></div>
     <div class="stats" id="draftState">草稿：未加载</div>
   </div>
 
@@ -150,26 +147,6 @@ $('themeBtn').onclick = () => {
   localStorage.setItem('nr_theme', next); $('themeBtn').textContent = next === 'dark' ? '☀️' : '🌙';
 };
 
-// ---------- 密码强度 ----------
-function pwdScore(p) {
-  if (!p) return 0;
-  let pool = 0;
-  if (/[a-z]/.test(p)) pool += 26;
-  if (/[A-Z]/.test(p)) pool += 26;
-  if (/[0-9]/.test(p)) pool += 10;
-  if (/[^a-zA-Z0-9]/.test(p)) pool += 32;
-  if (/[\u4e00-\u9fa5]/.test(p)) pool += 4096;
-  const entropy = p.length * Math.log2(Math.max(pool, 2));
-  return Math.min(100, Math.round(entropy)); // ~60+ 良好
-}
-$('inputPass').addEventListener('input', e => {
-  const p = e.target.value, s = pwdScore(p);
-  const bar = $('pwdBar');
-  bar.style.width = s + '%';
-  bar.style.background = s < 40 ? '#f85149' : s < 60 ? '#d29922' : '#3fb950';
-  $('pwdHint').textContent = !p ? '— 未输入' :
-    `— 强度约 ${s}（${s < 40 ? '弱：建议 ≥12 位混合字符' : s < 60 ? '中：可用，换长密码更佳' : '强'}）`;
-});
 $('togglePwd').onclick = () => {
   const i = $('inputPass');
   i.type = i.type === 'password' ? 'text' : 'password';
@@ -410,7 +387,7 @@ async function processAndSend() {
     if (resp.status === 204) {
       note('✅ 保存成功！已提交同步，稍后去网盘查看。', 'ok');
       $('content').value = ''; updateCount(); saveDraft(true);
-      $('inputPass').value = ''; $('pwdBar').style.width = '0';
+      $('inputPass').value = '';
     } else {
       let msg = `HTTP ${resp.status}`;
       try { const e = await resp.json(); msg = e.message || msg; } catch {}
