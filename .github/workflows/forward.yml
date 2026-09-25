@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   decrypt-and-sync:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       actions: read # 仅用于限流守卫查询本 workflow 运行历史
@@ -43,7 +43,7 @@ jobs:
           fi
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.x'
 
