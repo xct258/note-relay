@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 
-PBKDF2_ITER = 310000  # 必须与 index.html / forward.yml 一致
+PBKDF2_ITER = 310000  # 必须与 index.html 一致
 
 
 def scope_usage(password: str, purpose: str) -> bytes:
