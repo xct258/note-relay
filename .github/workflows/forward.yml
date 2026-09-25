@@ -53,7 +53,7 @@ jobs:
       - name: 解析笔记数据
         env:
           NOTE_PAYLOAD: ${{ github.event.inputs.payload }}
-          SYNC_PASSWORD: ${{ secrets.SYNC_PASSWORD }}
+          PASSWORD: ${{ secrets.DECRYPT_PASSWORD }}
           MAX_AGE_SEC: '900' # 15 分钟有效期；时钟 skew 另允 300s
         run: |
           python3 << 'EOF'
@@ -84,7 +84,7 @@ jobs:
               key = make_key(scope_usage(password, usage), salt, it)
               return AESGCM(key).decrypt(iv, ct, None).decode("utf-8")
 
-          sync_password = os.environ["SYNC_PASSWORD"]
+          sync_password = os.environ["PASSWORD"]
           data = json.loads(unpack_envelope(os.environ["NOTE_PAYLOAD"], sync_password, "payload"))
 
           now = int(time.time() * 1000)

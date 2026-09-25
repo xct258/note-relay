@@ -27,9 +27,8 @@
    ```
    访问令牌用 fine-grained token，仓库只选本仓，权限 `Actions: Read and write`，有效期尽量短。
 2. **Secrets**（仓库 Settings → Secrets and variables → Actions）：
-   `SYNC_PASSWORD`（与同步密码一致）、`WEBDAV_URL`（以 `/` 结尾，如 `https://dav.example.com/notes/`）、
+   `DECRYPT_PASSWORD`（与同步密码一致）、`WEBDAV_URL`（以 `/` 结尾，如 `https://dav.example.com/notes/`）、
    `WEBDAV_USER`、`WEBDAV_PASSWORD`。
-   > 从旧版升级：把原来的 `DECRYPT_PASSWORD` 改名为 `SYNC_PASSWORD`（值不变），否则同步失败。
 3. **Pages**：从 `main` 分支发布根目录 `index.html`。
 4. **分支**：触发默认 `ref: main`；仓库、分支、文件名全固定在源码顶部，改部署只改那一处。
 
