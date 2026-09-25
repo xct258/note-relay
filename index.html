@@ -109,7 +109,7 @@
     </label>
   </div>
 
-  <button id="sendBtn" onclick="processAndSend()">保存到云盘</button>
+  <button id="sendBtn" onclick="processAndSend()">保存到仓库</button>
   <div id="notice"></div>
 
 <script>
@@ -121,8 +121,8 @@ const GH_BRANCH = 'main';
 // 同步凭证：固定写死在此，页面不提供任何修改入口
 const SYNC_CREDENTIAL = 'AQAEuvCfr4FcbTM+Uep1vgo+qmAPinw8Is8GkTLeL4Jdb7JkGbYqROi3hLDbjAZPxem6O7nnNl7NtPqmF32zCx7JFZYzA10nTyTgXVkuBcxJLqFN9JHWqU3Z0WhEx1SMgqQN4EOSFTtaNErbbTSzaHu92ROzpe5x7xHY+7s3pjjb86/htLZlhlNeU+E0LA==';
 const PBKDF2_ITER = 310000; // 安全参数，前后端必须一致
-const COOLDOWN_SEC = 60; // 每次保存后按钮冷却秒数（防误触；真限流靠服务端）
-const MAX_PLAINTEXT = 1024 * 1024;      // 内容上限 1MB
+const COOLDOWN_SEC = 60; // 成功保存后按钮冷却秒数（防误触连点）
+const MAX_PLAINTEXT = 1024 * 1024;      // 正文上限 1MB（GitHub Contents API 约 1MB 上限）
 
 const $ = id => document.getElementById(id);
 const te = new TextEncoder(), td = new TextDecoder();
@@ -236,6 +236,9 @@ function updateCount() {
   const chars = [...v].length, lines = v ? v.split('\n').length : 0;
   $('countState').textContent = `${chars} 字 · ${lines} 行 · 约 ${Math.max(1, Math.round(chars / 400))} 分钟`;
 }
+function refreshPreview() {
+  if ($('preview').style.display === 'block') $('preview').innerHTML = mdRender($('content').value);
+}
 let draftTimer = null;
 function saveDraft(silent) {
   localStorage.setItem('nr_draft', JSON.stringify({
@@ -262,7 +265,8 @@ function loadDraft() {
 $('overwrite').addEventListener('change', () => saveDraft(true));
 $('btnClearDraft').onclick = () => {
   localStorage.removeItem('nr_draft');
-  $('title').value = ''; $('folder').value = ''; $('content').value = ''; updateCount();
+  $('title').value = ''; $('folder').value = ''; $('content').value = '';
+  $('overwrite').checked = true; updateCount(); refreshPreview();
   $('draftState').textContent = '草稿：已清空'; note('草稿已清空。', 'ok');
 };
 $('btnTemplate').onclick = () => {
@@ -282,7 +286,7 @@ function note(msg, kind) {
   n.appendChild(document.createTextNode(msg));
 }
 
-// ---------- 发送冷却（纯前端体验层；真限流在服务端）----------
+// ---------- 保存冷却（仅成功后的防误触冷却）----------
 let cooldownTimer = null;
 function startCooldown(sec) {
   const btn = $('sendBtn');
@@ -292,7 +296,7 @@ function startCooldown(sec) {
     const left = Math.ceil((until - Date.now()) / 1000);
     if (left <= 0) {
       clearInterval(cooldownTimer);
-      btn.disabled = false; btn.textContent = '保存到云盘';
+      btn.disabled = false; btn.textContent = '保存到仓库';
     } else {
       btn.disabled = true; btn.textContent = `冷却中（${left}s 后可重发）`;
     }
@@ -312,10 +316,14 @@ async function gh(path, cred, init) {
   }, init || {}));
   return r;
 }
+async function errMsg(resp) {
+  try { const e = await resp.json(); return e.message || `HTTP ${resp.status}`; }
+  catch { return `HTTP ${resp.status}`; }
+}
 function cleanSeg(s, maxLen) {
   let t = s.replace(/[\0-\x1f\x7f]/g, '').trim().replace(/^\.+/, '');
   t = [...t].map(c => (/[A-Za-z0-9._\- ]/.test(c) || (c >= '一' && c <= '鿿')) ? c : '_').join('');
-  return t.replace(/\s+/g, ' ').trim().slice(0, maxLen);
+  return t.replace(/\s+/g, ' ').replace(/[. ]+$/, '').trim().slice(0, maxLen);
 }
 function buildRepoPath(folder, title) {
   const segs = [];
@@ -323,7 +331,7 @@ function buildRepoPath(folder, title) {
     const s = cleanSeg(p, 64);
     if (s && s !== '.' && s !== '..') segs.push(s);
   });
-  let name = cleanSeg(title, 100) || 'note.md';
+  let name = cleanSeg(title, 100) || 'note';
   if (!name.toLowerCase().endsWith('.md')) name += '.md';
   segs.push(name);
   return segs.slice(0, 6).join('/');
@@ -338,6 +346,7 @@ async function processAndSend() {
   const content = $('content').value;
   const btn = $('sendBtn');
 
+  if (btn.disabled) return; // 防重复触发
   if (!SYNC_CREDENTIAL) { note('同步凭证缺失，请联系管理员。', 'err'); return; }
   if (!pwd) { note('请输入同步密码！', 'err'); return; }
   if (!content.trim()) { note('正文内容不能为空！', 'err'); return; }
@@ -350,6 +359,7 @@ async function processAndSend() {
   note('正在处理…', 'warn');
 
   let syncCred = '';
+  let saved = false;
   try {
     // 1) 读取同步凭证
     try {
@@ -367,16 +377,15 @@ async function processAndSend() {
     const get = await gh(`${url}?ref=${GH_BRANCH}`, syncCred);
     if (get.status === 200) {
       const info = await get.json();
+      if (Array.isArray(info)) throw new Error('目标路径已被同名目录占用，请换标题');
       if (!info || info.type !== 'file' || !info.sha) throw new Error('目标路径已存在且不是文件，请换标题');
       sha = info.sha;
     } else if (get.status !== 404) {
-      let msg = `HTTP ${get.status}`;
-      try { const e = await get.json(); msg = e.message || msg; } catch {}
-      throw new Error('检查文件失败（' + msg + '）');
+      throw new Error('检查文件失败（' + await errMsg(get) + '）');
     }
     if (sha && !$('overwrite').checked) throw new Error('文件已存在，且未允许覆盖');
 
-    // 4) 创建或更新文件
+    // 4) 创建或更新文件（Contents API 用 PUT）
     btn.textContent = '正在写入仓库…';
     const body = {
       message: `同步笔记：${repoPath}`,
@@ -385,31 +394,38 @@ async function processAndSend() {
     };
     if (sha) body.sha = sha;
     const resp = await gh(url, syncCred, {
-        method: 'POST',
-        headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${syncCred}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+      method: 'PUT',
+      headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${syncCred}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     });
     if (resp.status === 200 || resp.status === 201) {
+      saved = true;
       note(`✅ 保存成功！已写入仓库 ${repoPath}`, 'ok');
-      $('content').value = ''; updateCount(); saveDraft(true);
+      $('content').value = ''; updateCount(); refreshPreview(); saveDraft(true);
       $('inputPass').value = '';
+    } else if (resp.status === 409) {
+      throw new Error('文件刚被他人改动，请重试（' + await errMsg(resp) + '）');
+    } else if (resp.status === 422) {
+      throw new Error('写入被拒：路径非法或内容超限（' + await errMsg(resp) + '）');
+    } else if (resp.status === 401) {
+      throw new Error('同步凭证无效或已过期，请联系管理员更新（' + await errMsg(resp) + '）');
+    } else if (resp.status === 403) {
+      throw new Error('被限流或凭证缺少 Contents 读写权限（' + await errMsg(resp) + '）');
+    } else if (resp.status === 404) {
+      throw new Error('仓库或分支不存在，或凭证无权访问（' + await errMsg(resp) + '）');
     } else {
-      let msg = `HTTP ${resp.status}`;
-      try { const e = await resp.json(); msg = e.message || msg; } catch {}
-      if (resp.status === 401) msg = '同步凭证无效或已过期，请联系管理员更新（' + msg + '）';
-      else if (resp.status === 404) msg = '仓库或分支不存在，检查源码顶部配置（' + msg + '）';
-      else if (resp.status === 422) msg = '写入被拒（路径非法或文件被他人改动，请重试）（' + msg + '）';
-      else if (resp.status === 403) msg = '被限流或凭证缺少读写权限（' + msg + '）';
-      throw new Error(msg);
+      throw new Error('保存失败（' + await errMsg(resp) + '）');
     }
   } catch (err) {
-    const m = /Failed to fetch|NetworkError|CORS/i.test(err.message || '')
+    const m = /Failed to fetch|NetworkError|Load failed|CORS/i.test(err.message || '')
       ? '网络/CORS 失败：请确认网络可访问 api.github.com，或换网络重试。'
       : err.message;
     note(`❌ ${m}`, 'err');
   } finally {
     syncCred = ''; // 清理临时数据
-    startCooldown(COOLDOWN_SEC);
+    btn.textContent = '保存到仓库';
+    if (saved) startCooldown(COOLDOWN_SEC);
+    else btn.disabled = false;
   }
 }
 
