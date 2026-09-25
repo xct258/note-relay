@@ -1,10 +1,10 @@
-name: Decrypt Package and Upload to WebDAV
+name: 同步笔记到网盘
 
 on:
   workflow_dispatch:
     inputs:
       payload:
-        description: '全量 Base64 密文包（v2 信封：0x01‖iterations‖salt‖iv‖ct）'
+        description: '笔记数据包'
         required: true
 
 # 最小权限：本 job 不需要读写仓库内容
@@ -50,11 +50,11 @@ jobs:
       - name: Install Dependencies
         run: pip install cryptography
 
-      - name: Decrypt Package
+      - name: 解析笔记数据
         env:
-          ENCRYPTED_PAYLOAD: ${{ github.event.inputs.payload }}
-          PASSWORD: ${{ secrets.DECRYPT_PASSWORD }}
-          MAX_AGE_SEC: '900' # 15 分钟防重放；时钟 skew 另允 300s
+          NOTE_PAYLOAD: ${{ github.event.inputs.payload }}
+          SYNC_PASSWORD: ${{ secrets.SYNC_PASSWORD }}
+          MAX_AGE_SEC: '900' # 15 分钟有效期；时钟 skew 另允 300s
         run: |
           python3 << 'EOF'
           import os, base64, json, re, time
@@ -64,34 +64,34 @@ jobs:
 
           PBKDF2_ITER = 310000  # 必须与 index.html 的 PBKDF2_ITER 一致
 
-          def derive(password: bytes, salt: bytes, it: int) -> bytes:
+          def make_key(password: bytes, salt: bytes, it: int) -> bytes:
               kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=it)
               return kdf.derive(password)
 
-          def scoped(password: str, purpose: str) -> bytes:
-              # 与前端 scopedPassword 对齐：password + \x00 + note-relay/<purpose>
-              return (password + "\x00" + "note-relay/" + purpose).encode()
+          def scope_usage(password: str, usage: str) -> bytes:
+              # 与前端 scopePass 对齐：password + \x00 + note-relay/<usage>
+              return (password + "\x00" + "note-relay/" + usage).encode()
 
-          def decrypt_envelope(b64: str, password: str, purpose: str) -> str:
-              # 只认 v2 信封：0x01 | iterations u32BE | salt16 | iv12 | ct
+          def unpack_envelope(b64: str, password: str, usage: str) -> str:
+              # 只认约定的数据包格式：0x01 | iterations u32BE | salt16 | iv12 | ct
               raw = base64.b64decode(b64.strip())
               if len(raw) <= 33 or raw[0] != 0x01:
-                  raise ValueError("密文格式不支持（只认 v2 信封）")
+                  raise ValueError("数据包格式不支持")
               it = int.from_bytes(raw[1:5], "big")
               if it != PBKDF2_ITER:
-                  raise ValueError(f"迭代次数不一致: {it}，请用当前版本工具重新生成")
+                  raise ValueError(f"数据版本不一致: {it}")
               salt, iv, ct = raw[5:21], raw[21:33], raw[33:]
-              key = derive(scoped(password, purpose), salt, it)
+              key = make_key(scope_usage(password, usage), salt, it)
               return AESGCM(key).decrypt(iv, ct, None).decode("utf-8")
 
-          password = os.environ["PASSWORD"]
-          data = json.loads(decrypt_envelope(os.environ["ENCRYPTED_PAYLOAD"], password, "payload"))
+          sync_password = os.environ["SYNC_PASSWORD"]
+          data = json.loads(unpack_envelope(os.environ["NOTE_PAYLOAD"], sync_password, "payload"))
 
           now = int(time.time() * 1000)
           ts = int(data.get("timestamp", 0))
           max_age = int(os.environ.get("MAX_AGE_SEC", "900")) * 1000
           if ts <= 0 or (now - ts) > max_age or (ts - now) > 300_000:
-              raise SystemExit(f"timestamp 校验失败（过期或时钟偏差过大），疑似重放。now={now} ts={ts}")
+              raise SystemExit(f"时间戳无效（过期或时钟偏差过大）。now={now} ts={ts}")
 
           title = str(data.get("title", "note.md")).strip() or "note.md"
           folder = str(data.get("folder", "") or "").strip().replace("\\", "/")
@@ -141,10 +141,10 @@ jobs:
               env_file.write(f"OVERWRITE={'true' if overwrite else 'false'}\n")
               env_file.write(f"NOTE_BYTES={len(content.encode('utf-8'))}\n")
 
-          print(f"解密成功：版本 v{data.get('v', 1)}，目标 {rel_path}（{len(content.encode('utf-8'))}B）")
+          print(f"处理成功，目标 {rel_path}（{len(content.encode('utf-8'))}B）")
           EOF
 
-      - name: Upload to WebDAV
+      - name: 上传到网盘
         env:
           WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
           WEBDAV_USER: ${{ secrets.WEBDAV_USER }}

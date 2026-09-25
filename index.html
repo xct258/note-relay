@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light dark">
-  <title>极简中转笔记 v2</title>
+  <title>极简云笔记</title>
   <style>
     :root {
       --bg: #ffffff; --fg: #1f2328; --muted: #656d76;
@@ -68,19 +68,18 @@
 </head>
 <body>
   <header>
-    <h2>🔒 极简端到端加密笔记 <span style="font-size:12px;color:var(--muted)">v2</span></h2>
+    <h2>📝 极简云笔记</h2>
     <button class="ghost-btn" id="themeBtn" title="切换明暗">🌙</button>
   </header>
   <div class="sub">
-    口令在本地派生两把独立密钥：一把解 Token、一把加密笔记（用途隔离 + PBKDF2-SHA256 310k 次 + AES-GCM）。
-    笔记以 <code>{title, folder, content, timestamp, nonce}</code> 全量加密后经 GitHub Actions 中转到 WebDAV，全程无自建服务器。<br>
-    快捷键 <kbd>Ctrl/⌘ + Enter</kbd> 发送。
+    在线写 Markdown，一键同步到你的网盘，全程不需要自己的服务器。<br>
+    快捷键 <kbd>Ctrl/⌘ + Enter</kbd> 保存。
   </div>
 
   <div class="form-group">
-    <label>🔑 密钥口令 <span class="hint" id="pwdHint">— 未输入</span></label>
+    <label>🔑 同步密码 <span class="hint" id="pwdHint">— 未输入</span></label>
     <div class="pwd-wrap">
-      <input type="password" id="inputPass" placeholder="输入口令" autocomplete="off" />
+      <input type="password" id="inputPass" placeholder="输入同步密码" autocomplete="off" />
       <button class="ghost-btn" id="togglePwd" type="button">显示</button>
     </div>
     <div class="meter"><div id="pwdBar"></div></div>
@@ -89,7 +88,7 @@
 
   <div class="row">
     <div class="form-group">
-      <label>📁 网盘子目录 <span class="hint">可选，如 notes/2026/09（加密外发，不明文传输）</span></label>
+      <label>📁 网盘子目录 <span class="hint">可选，如 notes/2026/09</span></label>
       <input type="text" id="folder" placeholder="notes" autocomplete="off" />
     </div>
     <div class="form-group">
@@ -119,7 +118,7 @@
     </label>
   </div>
 
-  <button id="sendBtn" onclick="processAndSend()">全量加密并提交中转</button>
+  <button id="sendBtn" onclick="processAndSend()">保存到云盘</button>
   <div id="notice"></div>
 
 <script>
@@ -128,13 +127,13 @@
 const GH_OWNER = 'xct258';
 const GH_REPO = 'note-relay';
 const WORKFLOW_FILE = 'forward.yml';
-// Token 密文串：固定写死在此，页面不提供任何修改入口
-const ENCRYPTED_TOKEN_BLOB = 'AQAEuvCfr4FcbTM+Uep1vgo+qmAPinw8Is8GkTLeL4Jdb7JkGbYqROi3hLDbjAZPxem6O7nnNl7NtPqmF32zCx7JFZYzA10nTyTgXVkuBcxJLqFN9JHWqU3Z0WhEx1SMgqQN4EOSFTtaNErbbTSzaHu92ROzpe5x7xHY+7s3pjjb86/htLZlhlNeU+E0LA==';
-const PBKDF2_ITER = 310000; // PBKDF2-HMAC-SHA256 迭代次数，前后端必须一致
-const COOLDOWN_SEC = 60; // 每次发送后按钮冷却秒数（防误触；真限流靠 Actions 端守卫）
-const MAX_PLAINTEXT = 1024 * 1024;      // 明文上限 1MB
-const WARN_B64_LEN = 28000;             // dispatch 输入实用上限预警
-const MAX_AGE_NOTE = '（后端 15 分钟防重放，见 forward.yml）';
+// 同步凭证：固定写死在此，页面不提供任何修改入口
+const SYNC_CREDENTIAL = 'AQAEuvCfr4FcbTM+Uep1vgo+qmAPinw8Is8GkTLeL4Jdb7JkGbYqROi3hLDbjAZPxem6O7nnNl7NtPqmF32zCx7JFZYzA10nTyTgXVkuBcxJLqFN9JHWqU3Z0WhEx1SMgqQN4EOSFTtaNErbbTSzaHu92ROzpe5x7xHY+7s3pjjb86/htLZlhlNeU+E0LA==';
+const PBKDF2_ITER = 310000; // 安全参数，前后端必须一致
+const COOLDOWN_SEC = 60; // 每次保存后按钮冷却秒数（防误触；真限流靠服务端）
+const MAX_PLAINTEXT = 1024 * 1024;      // 内容上限 1MB
+const WARN_B64_LEN = 28000;             // 请求长度实用上限预警
+const MAX_AGE_NOTE = '（服务端 15 分钟有效期，见 forward.yml）';
 
 const $ = id => document.getElementById(id);
 const te = new TextEncoder(), td = new TextDecoder();
@@ -151,7 +150,7 @@ $('themeBtn').onclick = () => {
   localStorage.setItem('nr_theme', next); $('themeBtn').textContent = next === 'dark' ? '☀️' : '🌙';
 };
 
-// ---------- 口令强度 ----------
+// ---------- 密码强度 ----------
 function pwdScore(p) {
   if (!p) return 0;
   let pool = 0;
@@ -169,7 +168,7 @@ $('inputPass').addEventListener('input', e => {
   bar.style.width = s + '%';
   bar.style.background = s < 40 ? '#f85149' : s < 60 ? '#d29922' : '#3fb950';
   $('pwdHint').textContent = !p ? '— 未输入' :
-    `— 强度约 ${s}（${s < 40 ? '弱：建议 ≥12 位混合字符' : s < 60 ? '中：可发送，换长口令更佳' : '强'}）`;
+    `— 强度约 ${s}（${s < 40 ? '弱：建议 ≥12 位混合字符' : s < 60 ? '中：可用，换长密码更佳' : '强'}）`;
 });
 $('togglePwd').onclick = () => {
   const i = $('inputPass');
@@ -177,10 +176,10 @@ $('togglePwd').onclick = () => {
   $('togglePwd').textContent = i.type === 'password' ? '显示' : '隐藏';
 };
 
-// ---------- 加密原语（用途隔离 + 版本信封）----------
-function scopedPassword(password, purpose) { return password + '\x00' + 'note-relay/' + purpose; }
-async function deriveKey(password, salt, iterations, purpose) {
-  const km = await crypto.subtle.importKey('raw', te.encode(scopedPassword(password, purpose)),
+// ---------- 数据打包（本地处理，版本化数据包）----------
+function scopePass(password, purpose) { return password + '\x00' + 'note-relay/' + purpose; }
+async function makeKey(password, salt, iterations, purpose) {
+  const km = await crypto.subtle.importKey('raw', te.encode(scopePass(password, purpose)),
     { name: 'PBKDF2' }, false, ['deriveKey']);
   return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
     km, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
@@ -195,28 +194,28 @@ function b64decode(b64) {
   for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
   return u8;
 }
-// v2 信封: 0x01 | iterations u32BE | salt16 | iv12 | ct
-async function encryptEnvelope(plainText, password, purpose) {
+// 数据包格式: 0x01 | iterations u32BE | salt16 | iv12 | ct
+async function packEnvelope(plainText, password, purpose) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const key = await deriveKey(password, salt, PBKDF2_ITER, purpose);
+  const key = await makeKey(password, salt, PBKDF2_ITER, purpose);
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, te.encode(plainText)));
   const out = new Uint8Array(1 + 4 + 16 + 12 + ct.length);
   out[0] = 0x01; new DataView(out.buffer).setUint32(1, PBKDF2_ITER);
   out.set(salt, 5); out.set(iv, 21); out.set(ct, 33);
   return b64encode(out);
 }
-// 解密：只认 v2 信封（0x01 | iterations u32BE | salt16 | iv12 | ct），其他一律拒绝
-async function decryptEnvelope(encryptedBase64, password, purpose) {
+// 解析：只认约定的数据包格式，其他一律拒绝
+async function unpackEnvelope(encryptedBase64, password, purpose) {
   const raw = b64decode(encryptedBase64.replace(/\s+/g, ''));
-  if (raw.length <= 33 || raw[0] !== 0x01) throw new Error('密文格式不支持，请重新生成 Token 密文串');
+  if (raw.length <= 33 || raw[0] !== 0x01) throw new Error('数据格式不支持，请联系管理员更新同步凭证');
   const it = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getUint32(1);
-  if (it !== PBKDF2_ITER) throw new Error('迭代次数不一致，请用当前版本工具重新生成');
+  if (it !== PBKDF2_ITER) throw new Error('数据版本不匹配，请更新到最新页面');
   const salt = raw.slice(5, 21), iv = raw.slice(21, 33), ct = raw.slice(33);
-  const key = await deriveKey(password, salt, it, purpose);
+  const key = await makeKey(password, salt, it, purpose);
   return td.decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct));
 }
-function looksLikeToken(s) {
+function looksLikeCredential(s) {
   return /^(ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|fine-grained)/.test(s);
 }
 
@@ -290,10 +289,10 @@ function saveDraft(silent) {
 function loadDraft() {
   try {
     const d = JSON.parse(localStorage.getItem('nr_draft') || 'null');
-    if (!d) { $('draftState').textContent = '草稿：无（本机明文存放，注意隐私电脑使用）'; return; }
+    if (!d) { $('draftState').textContent = '草稿：无（仅存本机，注意隐私电脑使用）'; return; }
     $('title').value = d.title || ''; $('folder').value = d.folder || '';
     $('content').value = d.content || ''; $('overwrite').checked = d.overwrite !== false;
-    $('draftState').textContent = '草稿：已恢复（' + new Date(d.updatedAt).toLocaleString() + '，本机明文存放）';
+    $('draftState').textContent = '草稿：已恢复（' + new Date(d.updatedAt).toLocaleString() + '，仅存本机）';
     updateCount();
   } catch { /* ignore */ }
 }
@@ -332,7 +331,7 @@ function note(msg, kind, htmlUrl) {
   }
 }
 
-// ---------- 发送冷却（纯前端体验层，可被绕过；真限流在 forward.yml 守卫）----------
+// ---------- 发送冷却（纯前端体验层；真限流在服务端）----------
 let cooldownTimer = null;
 function startCooldown(sec) {
   const btn = $('sendBtn');
@@ -342,7 +341,7 @@ function startCooldown(sec) {
     const left = Math.ceil((until - Date.now()) / 1000);
     if (left <= 0) {
       clearInterval(cooldownTimer);
-      btn.disabled = false; btn.textContent = '全量加密并提交中转';
+      btn.disabled = false; btn.textContent = '保存到云盘';
     } else {
       btn.disabled = true; btn.textContent = `冷却中（${left}s 后可重发）`;
     }
@@ -356,19 +355,19 @@ function autoTitle() {
   const d = new Date(), pad = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.md`;
 }
-async function gh(path, token, init) {
+async function gh(path, cred, init) {
   const r = await fetch(`https://api.github.com${path}`, Object.assign({
-    headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${token}` }
+    headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${cred}` }
   }, init || {}));
   return r;
 }
-async function pollRun(token, since) {
-  // 找到本次 dispatch 触发的 run，最多等 ~90s 拿 conclusion
+async function pollRun(cred, since) {
+  // 找到本次触发的任务，最多等 ~90s 拿结论
   let run = null;
   for (let i = 0; i < 6 && !run; i++) {
     await new Promise(r => setTimeout(r, 3000));
     try {
-      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=5`, token);
+      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=5`, cred);
       if (!r.ok) return null;
       const j = await r.json();
       (j.workflow_runs || []).forEach(x => {
@@ -381,7 +380,7 @@ async function pollRun(token, since) {
     if (run.status === 'completed') return run;
     await new Promise(r => setTimeout(r, 5000));
     try {
-      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/runs/${run.id}`, token);
+      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/runs/${run.id}`, cred);
       if (!r.ok) return run;
       run = await r.json();
     } catch { return run; }
@@ -396,64 +395,64 @@ async function processAndSend() {
   const content = $('content').value;
   const btn = $('sendBtn');
 
-  if (!ENCRYPTED_TOKEN_BLOB) { note('尚未填入 Token 密文串：先用下方生成工具生成，填入源码顶部后重新部署。', 'err'); return; }
-  if (!pwd) { note('请输入密钥口令！', 'err'); return; }
+  if (!SYNC_CREDENTIAL) { note('同步凭证缺失，请联系管理员。', 'err'); return; }
+  if (!pwd) { note('请输入同步密码！', 'err'); return; }
   if (!content.trim()) { note('正文内容不能为空！', 'err'); return; }
   if (te.encode(content).length > MAX_PLAINTEXT) { note('正文超过 1MB 上限，请拆分发送。', 'err'); return; }
   if (!title && $('autoDate').checked) { title = autoTitle(); $('title').value = title; }
   if (!title) title = 'note.md';
 
   btn.disabled = true;
-  btn.textContent = '正在本地核验密钥并打包加密…';
-  note('正在处理…（口令只在本地内存使用，不上传）', 'warn');
+  btn.textContent = '正在打包并同步…';
+  note('正在处理…', 'warn');
 
-  let realToken = '';
+  let syncCred = '';
   const t0 = Date.now();
   try {
-    // 1) 本地解密 Token
+    // 1) 读取同步凭证
     try {
-      realToken = (await decryptEnvelope(ENCRYPTED_TOKEN_BLOB, pwd, 'token')).trim();
-      if (!looksLikeToken(realToken)) throw new Error('bad shape');
+      syncCred = (await unpackEnvelope(SYNC_CREDENTIAL, pwd, 'token')).trim();
+      if (!looksLikeCredential(syncCred)) throw new Error('bad shape');
     } catch {
-      throw new Error('口令错误，无法解密认证凭据！');
+      throw new Error('密码错误，同步失败！');
     }
-    // 2) 打包加密业务（用途隔离 purpose=payload）
+    // 2) 打包笔记数据
     const payloadObj = JSON.stringify({
       v: 2, title, folder,
       content, overwrite: $('overwrite').checked,
       timestamp: Date.now(),
       nonce: b64encode(crypto.getRandomValues(new Uint8Array(12))).slice(0, 16)
     });
-    const encryptedPayload = await encryptEnvelope(payloadObj, pwd, 'payload');
-    if (encryptedPayload.length > WARN_B64_LEN)
-      note(`密文约 ${(encryptedPayload.length / 1024).toFixed(1)}KB，接近 dispatch 输入上限，若 422 请拆分正文。${MAX_AGE_NOTE}`, 'warn');
+    const packedData = await packEnvelope(payloadObj, pwd, 'payload');
+    if (packedData.length > WARN_B64_LEN)
+      note(`数据约 ${(packedData.length / 1024).toFixed(1)}KB，接近请求长度上限，若失败请拆分正文。${MAX_AGE_NOTE}`, 'warn');
 
-    // 3) dispatch
-    btn.textContent = '正在中转发送…';
+    // 3) 发送
+    btn.textContent = '正在同步…';
     const resp = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`,
-      realToken, {
+      syncCred, {
         method: 'POST',
-        headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${realToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref: 'main', inputs: { payload: encryptedPayload } })
+        headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${syncCred}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ref: 'main', inputs: { payload: packedData } })
       });
     if (resp.status === 204) {
-      btn.textContent = '已送达，正在查询后台同步状态…';
-      const run = await pollRun(realToken, t0);
+      btn.textContent = '已提交，正在查询同步状态…';
+      const run = await pollRun(syncCred, t0);
       const url = run && run.html_url;
       const tail = run
-        ? (run.conclusion === 'success' ? '后台已同步至网盘 ✅' :
-           run.conclusion ? `后台结论：${run.conclusion}，请点运行记录查看` : '后台仍在同步，可点运行记录跟踪')
+        ? (run.conclusion === 'success' ? '已同步至网盘 ✅' :
+           run.conclusion ? `同步结果：${run.conclusion}，请点运行记录查看` : '仍在同步，可点运行记录跟踪')
         : '已入队，可稍后去 Actions 页查看同步结果';
-      note(`✅ 发送成功！${tail}`, run && run.conclusion && run.conclusion !== 'success' ? 'warn' : 'ok', url);
+      note(`✅ 保存成功！${tail}`, run && run.conclusion && run.conclusion !== 'success' ? 'warn' : 'ok', url);
       $('content').value = ''; updateCount(); saveDraft(true);
       $('inputPass').value = ''; $('pwdBar').style.width = '0';
     } else {
       let msg = `HTTP ${resp.status}`;
       try { const e = await resp.json(); msg = e.message || msg; } catch {}
-      if (resp.status === 401) msg = 'Token 无效或已过期，用 tools/make_blob.py 重新生成密文串并更新源码（' + msg + '）';
+      if (resp.status === 401) msg = '同步凭证无效或已过期，请联系管理员更新（' + msg + '）';
       else if (resp.status === 404) msg = '仓库/Workflow 不存在，检查源码顶部配置与分支名（' + msg + '）';
-      else if (resp.status === 422) msg = '参数被拒（多为密文过大，请拆分正文）（' + msg + '）';
-      else if (resp.status === 403) msg = '被限流或 Token 缺少 actions:write 权限（' + msg + '）';
+      else if (resp.status === 422) msg = '参数被拒（多为数据包过大，请拆分正文）（' + msg + '）';
+      else if (resp.status === 403) msg = '被限流或凭证权限不足（' + msg + '）';
       throw new Error(msg);
     }
   } catch (err) {
@@ -462,7 +461,7 @@ async function processAndSend() {
       : err.message;
     note(`❌ ${m}`, 'err');
   } finally {
-    realToken = ''; // 尽量清内存痕迹
+    syncCred = ''; // 清理临时数据
     startCooldown(COOLDOWN_SEC);
   }
 }

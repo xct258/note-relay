@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""生成填入 index.html 顶部 ENCRYPTED_TOKEN_BLOB 的密文串（v2 信封）。
+"""生成填入 index.html 顶部 SYNC_CREDENTIAL 的同步凭证。
 
-用法（PAT 不进 shell 历史，先 read 再执行）：
-    read -s GHPAT && read -s PWD && python3 tools/make_blob.py --purpose token
-    # 按提示粘贴 PAT 与口令（通过环境变量传入），输出 base64 密文串
+用法（访问令牌不进 shell 历史，先 read 再执行）：
+    read -s GHPAT && read -s PWD && python3 tools/make_credential.py --purpose token
+    # 按提示粘贴访问令牌与同步密码（通过环境变量传入），输出 base64 凭证串
 
 也可直接传参（会进 shell 历史，仅可信本机用）：
-    python3 tools/make_blob.py --purpose token --password '你的口令' --secret 'ghp_xxx'
+    python3 tools/make_credential.py --purpose token --password '你的密码' --secret 'ghp_xxx'
 """
 import argparse
 import base64
@@ -21,14 +21,14 @@ from cryptography.hazmat.primitives import hashes
 PBKDF2_ITER = 310000  # 必须与 index.html / forward.yml 一致
 
 
-def scoped(password: str, purpose: str) -> bytes:
+def scope_usage(password: str, purpose: str) -> bytes:
     return (password + "\x00" + "note-relay/" + purpose).encode()
 
 
-def encrypt_envelope(plain: str, password: str, purpose: str) -> str:
+def pack_envelope(plain: str, password: str, purpose: str) -> str:
     salt, iv = os.urandom(16), os.urandom(12)
     kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=PBKDF2_ITER)
-    key = kdf.derive(scoped(password, purpose))
+    key = kdf.derive(scope_usage(password, purpose))
     ct = AESGCM(key).encrypt(iv, plain.encode(), None)
     return base64.b64encode(bytes([0x01]) + PBKDF2_ITER.to_bytes(4, "big") + salt + iv + ct).decode()
 
@@ -39,12 +39,12 @@ def main() -> int:
     ap.add_argument("--password", default=os.environ.get("PWD") or os.environ.get("PASSWORD"))
     ap.add_argument("--secret", default=os.environ.get("GHPAT"))
     args = ap.parse_args()
-    password = args.password or getpass.getpass("口令: ")
-    secret = args.secret or getpass.getpass("PAT/明文: ")
+    password = args.password or getpass.getpass("同步密码: ")
+    secret = args.secret or getpass.getpass("访问令牌/内容: ")
     if not password or not secret:
-        print("口令和明文不能为空", file=sys.stderr)
+        print("密码和内容不能为空", file=sys.stderr)
         return 1
-    print(encrypt_envelope(secret, password, args.purpose))
+    print(pack_envelope(secret, password, args.purpose))
     return 0
 
 
