@@ -4,12 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       payload:
-        description: '全量 Base64 密文包'
+        description: '全量 Base64 密文包（v2 信封优先，兼容 v1 老包）'
         required: true
+
+# 最小权限：本 job 不需要读写仓库内容
+permissions: {}
+
+concurrency:
+  group: webdav-upload
+  cancel-in-progress: false
 
 jobs:
   decrypt-and-sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -23,49 +31,165 @@ jobs:
         env:
           ENCRYPTED_PAYLOAD: ${{ github.event.inputs.payload }}
           PASSWORD: ${{ secrets.DECRYPT_PASSWORD }}
+          MAX_AGE_SEC: '900' # 15 分钟防重放；时钟 skew 另允 300s
         run: |
-          python3 -c "
-          import os, base64, json
+          python3 << 'EOF'
+          import os, base64, json, re, time
           from cryptography.hazmat.primitives.ciphers.aead import AESGCM
           from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
           from cryptography.hazmat.primitives import hashes
 
-          raw = base64.b64decode(os.environ['ENCRYPTED_PAYLOAD'])
-          salt, iv, ciphertext = raw[:16], raw[16:28], raw[28:]
+          def derive(password: bytes, salt: bytes, it: int) -> bytes:
+              kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=it)
+              return kdf.derive(password)
 
-          kdf = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=100000)
-          key = kdf.derive(os.environ['PASSWORD'].encode())
-          aesgcm = AESGCM(key)
-          decrypted_str = aesgcm.decrypt(iv, ciphertext, None).decode('utf-8')
+          def scoped(password: str, purpose: str | None) -> bytes:
+              # 与前端 scopedPassword 对齐：password + \x00 + note-relay/<purpose>
+              if purpose is None:
+                  return password.encode()
+              return (password + "\x00" + "note-relay/" + purpose).encode()
 
-          data = json.loads(decrypted_str)
-          title = data.get('title', 'note.md').strip()
-          content = data.get('content', '')
+          def decrypt_envelope(b64: str, password: str, purpose: str) -> str:
+              raw = base64.b64decode(b64.strip())
+              # v2: 0x01 | iterations u32BE | salt16 | iv12 | ct
+              if len(raw) > 33 and raw[0] == 0x01:
+                  it = int.from_bytes(raw[1:5], "big")
+                  if not (100000 <= it <= 2000000):
+                      raise ValueError(f"iterations 非法: {it}")
+                  salt, iv, ct = raw[5:21], raw[21:33], raw[33:]
+                  key = derive(scoped(password, purpose), salt, it)
+                  return AESGCM(key).decrypt(iv, ct, None).decode("utf-8")
+              # v1 legacy: salt16 | iv12 | ct, PBKDF2 100k（先试用途隔离，再试裸口令）
+              salt, iv, ct = raw[:16], raw[16:28], raw[28:]
+              last = None
+              for p in (purpose, None):
+                  try:
+                      key = derive(scoped(password, p), salt, 100000)
+                      return AESGCM(key).decrypt(iv, ct, None).decode("utf-8")
+                  except Exception as e:
+                      last = e
+              raise last
 
-          safe_title = ''.join(c if c.isalnum() or c in '._- ' else '_' for c in title)
-          if not safe_title.endswith('.md'):
-              safe_title += '.md'
+          password = os.environ["PASSWORD"]
+          data = json.loads(decrypt_envelope(os.environ["ENCRYPTED_PAYLOAD"], password, "payload"))
 
-          with open('note.md', 'w', encoding='utf-8') as f:
+          now = int(time.time() * 1000)
+          ts = int(data.get("timestamp", 0))
+          max_age = int(os.environ.get("MAX_AGE_SEC", "900")) * 1000
+          if ts <= 0 or (now - ts) > max_age or (ts - now) > 300_000:
+              raise SystemExit(f"timestamp 校验失败（过期或时钟偏差过大），疑似重放。now={now} ts={ts}")
+
+          title = str(data.get("title", "note.md")).strip() or "note.md"
+          folder = str(data.get("folder", "") or "").strip().replace("\\", "/")
+          content = str(data.get("content", ""))
+          overwrite = bool(data.get("overwrite", True))
+
+          if len(content.encode("utf-8")) > 1024 * 1024:
+              raise SystemExit("正文超过 1MB 上限，已拒绝。")
+          if len(title) > 200:
+              raise SystemExit("标题过长（>200），已拒绝。")
+
+          def clean_segment(seg: str) -> str:
+              # 去控制字符/首尾空白点，保留字母数字（含 CJK）与 ._- 空格
+              seg = re.sub(r"[\x00-\x1f\x7f]", "", seg).strip().strip(".")
+              seg = "".join(c if (c.isalnum() or c in "._- ") else "_" for c in seg)
+              seg = re.sub(r"\s+", " ", seg).strip()
+              return seg
+
+          # folder: 最多 5 级，每级 1..64 字符，禁 . .. 空段
+          folder_segs = []
+          if folder:
+              for part in folder.split("/"):
+                  s = clean_segment(part)
+                  if s in ("", ".", "..") or len(s) > 64:
+                      continue
+                  folder_segs = folder_segs + [s]
+                  if len(folder_segs) >= 5:
+                      break
+
+          safe_title = clean_segment(title)
+          if not safe_title or safe_title in (".", ".."):
+              safe_title = "note.md"
+          if len(safe_title) > 100:
+              stem, dot, ext = safe_title.rpartition(".")
+              safe_title = (stem[:96] + dot + ext) if dot else safe_title[:100]
+          if not safe_title.lower().endswith(".md"):
+              safe_title += ".md"
+
+          rel_path = "/".join(folder_segs + [safe_title]) if folder_segs else safe_title
+
+          with open("note.md", "w", encoding="utf-8") as f:
               f.write(content)
 
-          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env_file:
-              env_file.write(f'FINAL_TITLE={safe_title}\n')
-          "
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              # 路径原文（未 URL 编码）仅用于日志展示文件名；实际上传用编码后 URL
+              env_file.write(f"REL_PATH={rel_path}\n")
+              env_file.write(f"OVERWRITE={'true' if overwrite else 'false'}\n")
+              env_file.write(f"NOTE_BYTES={len(content.encode('utf-8'))}\n")
+
+          print(f"解密成功：版本 v{data.get('v', 1)}，目标 {rel_path}（{len(content.encode('utf-8'))}B）")
+          EOF
 
       - name: Upload to WebDAV
         env:
           WEBDAV_URL: ${{ secrets.WEBDAV_URL }}
           WEBDAV_USER: ${{ secrets.WEBDAV_USER }}
           WEBDAV_PASSWORD: ${{ secrets.WEBDAV_PASSWORD }}
+          REL_PATH: ${{ env.REL_PATH }}
+          OVERWRITE: ${{ env.OVERWRITE }}
+          NOTE_BYTES: ${{ env.NOTE_BYTES }}
         run: |
-          TARGET="${WEBDAV_URL}${FINAL_TITLE}"
-          echo "正在上传至: $TARGET"
+          set -euo pipefail
+          python3 -c "import urllib.parse,os; print(urllib.parse.quote(os.environ['REL_PATH'], safe='/'))" > /tmp/enc_path
+          ENC_PATH="$(cat /tmp/enc_path)"
+          BASE="${WEBDAV_URL%/}/"
+          TARGET="${BASE}${ENC_PATH}"
 
-          # 自动跟随 301/302，并打印 HTTP 头排查状态
-          curl -i -L --fail-with-body \
-            -u "$WEBDAV_USER:$WEBDAV_PASSWORD" \
-            -T note.md \
-            "$TARGET"
+          echo "准备上传: ${REL_PATH} (${NOTE_BYTES}B)"
 
-          echo "✅ 上传成功！"
+          if [ "${OVERWRITE}" != "true" ]; then
+            CODE="$(curl -s -o /dev/null -w '%{http_code}' -u "$WEBDAV_USER:$WEBDAV_PASSWORD" -I "$TARGET" || true)"
+            if [ "$CODE" = "200" ]; then
+              echo "同名文件已存在且 overwrite=false，跳过上传。"
+              {
+                echo "### ⏭️ 跳过上传"
+                echo ""
+                echo "- 路径：\`${REL_PATH}\`"
+                echo "- 原因：已存在且未允许覆盖"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+
+          # 建父目录（部分 WebDAV 需要 MKCOL；失败忽略，PUT 时再看）
+          DIR="$(dirname "$ENC_PATH")"
+          if [ "$DIR" != "." ] && [ "$DIR" != "/" ]; then
+            IFS='/' read -ra SEGS <<< "$DIR"
+            ACC=""
+            for s in "${SEGS[@]}"; do
+              ACC="${ACC}${s}/"
+              curl -s -o /dev/null -w '%{http_code}' -u "$WEBDAV_USER:$WEBDAV_PASSWORD" \
+                -X MKCOL "${BASE}${ACC}" || true
+            done
+          fi
+
+          for i in 1 2 3; do
+            if curl --fail-with-body --retry 0 --connect-timeout 10 --max-time 60 \
+              -u "$WEBDAV_USER:$WEBDAV_PASSWORD" \
+              -H "Content-Type: text/markdown; charset=utf-8" \
+              -T note.md "$TARGET"; then
+              echo "上传成功（第 ${i} 次尝试）"
+              {
+                echo "### ✅ 上传成功"
+                echo ""
+                echo "- 路径：\`${REL_PATH}\`"
+                echo "- 大小：${NOTE_BYTES}B"
+                echo "- 覆盖：${OVERWRITE}"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "第 ${i} 次上传失败，3s 后重试…"
+            sleep 3
+          done
+          echo "上传失败（3 次重试均失败）" >&2
+          exit 1
