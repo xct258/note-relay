@@ -154,6 +154,7 @@ const WORKFLOW_FILE = 'forward.yml';
 // Token 密文串：用页内生成工具或 tools/make_blob.py 生成后填入（只认 v2 信封）
 const ENCRYPTED_TOKEN_BLOB = '';
 const PBKDF2_ITER = 310000; // PBKDF2-HMAC-SHA256 迭代次数，前后端必须一致
+const COOLDOWN_SEC = 60; // 每次发送后按钮冷却秒数（防误触；真限流靠 Actions 端守卫）
 const MAX_PLAINTEXT = 1024 * 1024;      // 明文上限 1MB
 const WARN_B64_LEN = 28000;             // dispatch 输入实用上限预警
 const MAX_AGE_NOTE = '（后端 15 分钟防重放，见 forward.yml）';
@@ -390,6 +391,25 @@ $('btnGen').onclick = async () => {
   finally { $('genPat').value = ''; }
 };
 
+// ---------- 发送冷却（纯前端体验层，可被绕过；真限流在 forward.yml 守卫）----------
+let cooldownTimer = null;
+function startCooldown(sec) {
+  const btn = $('sendBtn');
+  const until = Date.now() + sec * 1000;
+  clearInterval(cooldownTimer);
+  const tick = () => {
+    const left = Math.ceil((until - Date.now()) / 1000);
+    if (left <= 0) {
+      clearInterval(cooldownTimer);
+      btn.disabled = false; btn.textContent = '全量加密并提交中转';
+    } else {
+      btn.disabled = true; btn.textContent = `冷却中（${left}s 后可重发）`;
+    }
+  };
+  tick();
+  cooldownTimer = setInterval(tick, 500);
+}
+
 // ---------- 主流程 ----------
 function autoTitle() {
   const d = new Date(), pad = n => String(n).padStart(2, '0');
@@ -504,8 +524,7 @@ async function processAndSend() {
     note(`❌ ${m}`, 'err');
   } finally {
     realToken = ''; // 尽量清内存痕迹
-    btn.disabled = false;
-    btn.textContent = '全量加密并提交中转';
+    startCooldown(COOLDOWN_SEC);
   }
 }
 

@@ -18,7 +18,30 @@ jobs:
   decrypt-and-sync:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      actions: read # 仅用于限流守卫查询本 workflow 运行历史
     steps:
+      - name: Rate limit guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RATE_WINDOW_SEC: '300' # 统计窗口：近 5 分钟
+          RATE_MAX_RUNS: '3' # 窗口内最多触发次数（含本次），超过直接拒绝
+        run: |
+          set -euo pipefail
+          SINCE="$(date -u -d "@$(( $(date +%s) - RATE_WINDOW_SEC ))" +%Y-%m-%dT%H:%M:%SZ)"
+          COUNT="$(gh api "repos/${{ github.repository }}/actions/workflows/forward.yml/runs?event=workflow_dispatch&per_page=20" --jq "[.workflow_runs[] | select(.created_at > \"$SINCE\")] | length")"
+          echo "近 ${RATE_WINDOW_SEC}s 内已有 ${COUNT} 次触发（含本次），上限 ${RATE_MAX_RUNS} 次"
+          if [ "$COUNT" -gt "$RATE_MAX_RUNS" ]; then
+            echo "触发过于频繁，拒绝本次同步（防滥用）。"
+            {
+              echo "### ⛔ 已限流"
+              echo ""
+              echo "- 近 ${RATE_WINDOW_SEC}s 触发 ${COUNT} 次，超过上限 ${RATE_MAX_RUNS} 次"
+              echo "- 如为本人操作，等窗口过去后重发即可"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:

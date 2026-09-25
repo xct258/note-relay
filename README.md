@@ -34,6 +34,15 @@ PBKDF2-HMAC-SHA256 **310000 次**（`PBKDF2_ITER`，三处必须一致：`index.
 3. **Pages**：从 `main` 分支发布根目录 `index.html`。
 4. **分支**：dispatch 默认 `ref: main`；仓库、分支、文件名全固定在源码顶部，改部署只改那一处。
 
+## 防滥用限流（两层）
+
+* **Actions 端守卫（真限流，绕不过）**：每次运行先用 `GITHUB_TOKEN` 查本 workflow 近 5 分钟触发次数，
+  超过 3 次直接失败退出，不解密不上传。窗口/上限在 `forward.yml` 的 `RATE_WINDOW_SEC` / `RATE_MAX_RUNS` 调。
+  攻击者即使拿到 PAT 狂调 API，也只会产生一堆"已限流"的失败运行，网盘不会被刷。
+* **前端 60 秒冷却（体验层）**：每次发送后按钮倒计时，可被改 JS 绕过，不管真攻击，只防误触连点。
+
+另建议：dispatch 专用 PAT 只给 `Actions: Read and write` 单权限，即使泄露，破坏半径也仅限于触发运行。
+
 ## 前端功能（index.html，零构建单文件）
 
 * 口令强度条、显示/隐藏、`Ctrl/⌘+Enter` 发送，成功才清空正文+口令
