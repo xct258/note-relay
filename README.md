@@ -21,13 +21,12 @@ PBKDF2-HMAC-SHA256 **310000 次**（`PBKDF2_ITER`，三处必须一致：`index.
 
 ## 部署
 
-1. **生成 Token 密文串**：`ENCRYPTED_TOKEN_BLOB` 在源码顶部固定写死，空着无法发送。
-   用页面内生成工具，或离线脚本（等价，PAT 不进 shell 历史）：
+1. **Token 密文串**：已固定写死在 `index.html` 顶部 `ENCRYPTED_TOKEN_BLOB`，页面无任何修改入口。
+   轮换 PAT / 口令时用 `tools/make_blob.py` 重新生成并改源码：
    ```bash
    read -s GHPAT && read -s PWD && python3 tools/make_blob.py --purpose token
    ```
-   输出填入 `index.html` 顶部的 `ENCRYPTED_TOKEN_BLOB`。PAT 用 fine-grained token，
-   仓库只选本仓，权限 `Actions: Read and write`，有效期尽量短。
+   PAT 用 fine-grained token，仓库只选本仓，权限 `Actions: Read and write`，有效期尽量短。
 2. **Secrets**（仓库 Settings → Secrets and variables → Actions）：
    `DECRYPT_PASSWORD`（与发送口令一致）、`WEBDAV_URL`（以 `/` 结尾，如 `https://dav.example.com/notes/`）、
    `WEBDAV_USER`、`WEBDAV_PASSWORD`。
@@ -49,9 +48,8 @@ PBKDF2-HMAC-SHA256 **310000 次**（`PBKDF2_ITER`，三处必须一致：`index.
 * 编辑/预览双 tab（自带轻量 Markdown 渲染，先转义防 XSS）、字数/行数/阅读时长
 * 草稿自动保存（localStorage **明文**，仅本机）、一键插入模板/清空草稿
 * 文件夹 + 标题 + 覆盖开关 + 空标题按日期自动命名；密文过大（~28KB）预警
-* dispatch 后轮询 Actions 运行状态，给出结论与运行记录链接；本机历史（20 条，只存标题/时间/大小）
-* 明暗主题、本机历史（20 条，只存标题/时间/大小）
-* Token 密文生成器（页内）+ `tools/make_blob.py`（离线等价实现）
+* dispatch 后轮询 Actions 运行状态，给结论 + 运行记录链接
+* 明暗主题
 
 ## 后端行为（forward.yml）
 

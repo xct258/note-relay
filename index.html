@@ -60,12 +60,6 @@
     .meter { height: 6px; border-radius: 3px; background: var(--panel); border: 1px solid var(--border); overflow: hidden; margin-top: 6px; }
     .meter > div { height: 100%; width: 0; transition: width .2s; }
     .stats { font-size: 12px; color: var(--muted); margin-top: 6px; }
-    details { border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 14px 0; background: var(--panel); }
-    details summary { cursor: pointer; font-weight: 600; font-size: 14px; }
-    details .form-group { margin-top: 10px; }
-    #history { list-style: none; padding: 0; margin: 8px 0 0; font-size: 13px; }
-    #history li { padding: 7px 0; border-bottom: 1px dashed var(--border); display: flex; justify-content: space-between; gap: 8px; }
-    #history a { color: var(--accent); text-decoration: none; }
     kbd { border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 12px; background: var(--panel); }
     .pwd-wrap { position: relative; }
     .pwd-wrap .ghost-btn { position: absolute; right: 6px; top: 6px; padding: 4px 10px; }
@@ -128,31 +122,14 @@
   <button id="sendBtn" onclick="processAndSend()">全量加密并提交中转</button>
   <div id="notice"></div>
 
-  <details>
-    <summary>🔧 生成 Token 密文串（首次部署 / 换 PAT / 换口令时用一次）</summary>
-    <div class="form-group"><label>新 GitHub PAT（仅本机内存加密，不发送到任何地方）</label>
-      <input type="password" id="genPat" placeholder="ghp_… 或 github_pat_…" autocomplete="off" /></div>
-    <div class="form-group"><label>新口令（与上方发送口令一致）</label>
-      <input type="password" id="genPwd" autocomplete="off" /></div>
-    <div class="toolbar"><button type="button" class="mini-btn" id="btnGen">🔐 生成密文串</button></div>
-    <div class="form-group"><label>输出：填入源码顶部 ENCRYPTED_TOKEN_BLOB 后重新部署</label>
-      <input type="text" id="genOut" readonly /></div>
-  </details>
-
-  <details open>
-    <summary>📜 本机发送历史（仅标题/时间，不存正文，最多 20 条）</summary>
-    <ul id="history"></ul>
-    <div class="toolbar"><button type="button" class="mini-btn" id="btnClearHist">清空历史</button></div>
-  </details>
-
 <script>
 'use strict';
 // ===== 固定配置（部署时改这里；就这一处，没有其他配置入口）=====
 const GH_OWNER = 'xct258';
 const GH_REPO = 'note-relay';
 const WORKFLOW_FILE = 'forward.yml';
-// Token 密文串：用页内生成工具或 tools/make_blob.py 生成后填入（只认 v2 信封）
-const ENCRYPTED_TOKEN_BLOB = '';
+// Token 密文串：固定写死在此，页面不提供任何修改入口
+const ENCRYPTED_TOKEN_BLOB = 'AQAEuvCfr4FcbTM+Uep1vgo+qmAPinw8Is8GkTLeL4Jdb7JkGbYqROi3hLDbjAZPxem6O7nnNl7NtPqmF32zCx7JFZYzA10nTyTgXVkuBcxJLqFN9JHWqU3Z0WhEx1SMgqQN4EOSFTtaNErbbTSzaHu92ROzpe5x7xHY+7s3pjjb86/htLZlhlNeU+E0LA==';
 const PBKDF2_ITER = 310000; // PBKDF2-HMAC-SHA256 迭代次数，前后端必须一致
 const COOLDOWN_SEC = 60; // 每次发送后按钮冷却秒数（防误触；真限流靠 Actions 端守卫）
 const MAX_PLAINTEXT = 1024 * 1024;      // 明文上限 1MB
@@ -338,30 +315,6 @@ $('btnTemplate').onclick = () => {
   updateCount(); saveDraft(true);
 };
 
-// ---------- 历史 ----------
-function loadHist() {
-  let h = [];
-  try { h = JSON.parse(localStorage.getItem('nr_history') || '[]'); } catch {}
-  $('history').innerHTML = h.length ? '' : '<li style="color:var(--muted)">暂无发送记录</li>';
-  h.forEach(x => {
-    const li = document.createElement('li');
-    const t = document.createElement('span');
-    t.textContent = `${new Date(x.t).toLocaleString()} · ${x.folder ? x.folder + '/' : ''}${x.title} · ${x.bytes}B`;
-    li.appendChild(t);
-    if (x.url) {
-      const a = document.createElement('a'); a.href = x.url; a.target = '_blank';
-      a.rel = 'noopener'; a.textContent = '运行记录 ↗'; li.appendChild(a);
-    }
-    $('history').appendChild(li);
-  });
-}
-function pushHist(e) {
-  let h = [];
-  try { h = JSON.parse(localStorage.getItem('nr_history') || '[]'); } catch {}
-  h.unshift(e); localStorage.setItem('nr_history', JSON.stringify(h.slice(0, 20))); loadHist();
-}
-$('btnClearHist').onclick = () => { localStorage.removeItem('nr_history'); loadHist(); };
-
 // ---------- 提示 ----------
 function note(msg, kind, htmlUrl) {
   const n = $('notice');
@@ -378,18 +331,6 @@ function note(msg, kind, htmlUrl) {
     n.appendChild(a);
   }
 }
-
-// ---------- 生成 Token 密文 ----------
-$('btnGen').onclick = async () => {
-  const pat = $('genPat').value.trim(), pwd = $('genPwd').value;
-  if (!looksLikeToken(pat)) { note('PAT 格式看起来不对（应 ghp_ / github_pat_ 开头）。', 'err'); return; }
-  if (!pwd) { note('请填写新口令。', 'err'); return; }
-  try {
-    $('genOut').value = await encryptEnvelope(pat, pwd, 'token');
-    note('已生成密文串，填入源码顶部 ENCRYPTED_TOKEN_BLOB 后重新部署。', 'ok');
-  } catch (e) { note('生成失败：' + e.message, 'err'); }
-  finally { $('genPat').value = ''; }
-};
 
 // ---------- 发送冷却（纯前端体验层，可被绕过；真限流在 forward.yml 守卫）----------
 let cooldownTimer = null;
@@ -498,9 +439,7 @@ async function processAndSend() {
     if (resp.status === 204) {
       btn.textContent = '已送达，正在查询后台同步状态…';
       const run = await pollRun(realToken, t0);
-      const bytes = te.encode(content).length;
       const url = run && run.html_url;
-      pushHist({ t: Date.now(), title, folder, bytes, url });
       const tail = run
         ? (run.conclusion === 'success' ? '后台已同步至网盘 ✅' :
            run.conclusion ? `后台结论：${run.conclusion}，请点运行记录查看` : '后台仍在同步，可点运行记录跟踪')
@@ -511,7 +450,7 @@ async function processAndSend() {
     } else {
       let msg = `HTTP ${resp.status}`;
       try { const e = await resp.json(); msg = e.message || msg; } catch {}
-      if (resp.status === 401) msg = 'Token 无效或已过期，请重新生成密文串（' + msg + '）';
+      if (resp.status === 401) msg = 'Token 无效或已过期，用 tools/make_blob.py 重新生成密文串并更新源码（' + msg + '）';
       else if (resp.status === 404) msg = '仓库/Workflow 不存在，检查源码顶部配置与分支名（' + msg + '）';
       else if (resp.status === 422) msg = '参数被拒（多为密文过大，请拆分正文）（' + msg + '）';
       else if (resp.status === 403) msg = '被限流或 Token 缺少 actions:write 权限（' + msg + '）';
@@ -531,7 +470,7 @@ async function processAndSend() {
 document.addEventListener('keydown', e => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') processAndSend();
 });
-initTheme(); loadDraft(); loadHist(); updateCount();
+initTheme(); loadDraft(); updateCount();
 </script>
 </body>
 </html>
