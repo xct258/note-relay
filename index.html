@@ -361,33 +361,6 @@ async function gh(path, cred, init) {
   }, init || {}));
   return r;
 }
-async function pollRun(cred, since) {
-  // 找到本次触发的任务，最多等 ~90s 拿结论
-  let run = null;
-  for (let i = 0; i < 6 && !run; i++) {
-    await new Promise(r => setTimeout(r, 3000));
-    try {
-      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/workflows/${WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=5`, cred);
-      if (!r.ok) return null;
-      const j = await r.json();
-      (j.workflow_runs || []).forEach(x => {
-        if (new Date(x.created_at).getTime() >= since - 30000 && (!run || new Date(x.created_at) > new Date(run.created_at))) run = x;
-      });
-    } catch { return null; }
-  }
-  if (!run) return null;
-  for (let i = 0; i < 12; i++) {
-    if (run.status === 'completed') return run;
-    await new Promise(r => setTimeout(r, 5000));
-    try {
-      const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/actions/runs/${run.id}`, cred);
-      if (!r.ok) return run;
-      run = await r.json();
-    } catch { return run; }
-  }
-  return run;
-}
-
 async function processAndSend() {
   const pwd = $('inputPass').value;
   const folder = $('folder').value.trim();
@@ -407,7 +380,6 @@ async function processAndSend() {
   note('正在处理…', 'warn');
 
   let syncCred = '';
-  const t0 = Date.now();
   try {
     // 1) 读取同步凭证
     try {
@@ -436,14 +408,7 @@ async function processAndSend() {
         body: JSON.stringify({ ref: 'main', inputs: { payload: packedData } })
       });
     if (resp.status === 204) {
-      btn.textContent = '已提交，正在查询同步状态…';
-      const run = await pollRun(syncCred, t0);
-      const url = run && run.html_url;
-      const tail = run
-        ? (run.conclusion === 'success' ? '已同步至网盘 ✅' :
-           run.conclusion ? `同步结果：${run.conclusion}，请点运行记录查看` : '仍在同步，可点运行记录跟踪')
-        : '已入队，可稍后去 Actions 页查看同步结果';
-      note(`✅ 保存成功！${tail}`, run && run.conclusion && run.conclusion !== 'success' ? 'warn' : 'ok', url);
+      note('✅ 保存成功！已提交同步，稍后去网盘查看。', 'ok');
       $('content').value = ''; updateCount(); saveDraft(true);
       $('inputPass').value = ''; $('pwdBar').style.width = '0';
     } else {
