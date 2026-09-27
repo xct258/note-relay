@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light dark">
-<title>云笔记</title>
+<title>代码仓库</title>
 <style>
   :root {
     --bg: #f6f7f9;
@@ -244,9 +244,9 @@
   <!-- 解锁页 -->
   <div id="lock">
     <div class="lock-card">
-      <div class="lock-logo">📝</div>
-      <h1>云笔记</h1>
-      <p>输入同步密码以访问你的笔记</p>
+      <div class="lock-logo">💻</div>
+      <h1>代码仓库</h1>
+      <p>输入同步密码以访问你的代码</p>
       <div class="lock-field">
         <input id="lockPass" type="password" placeholder="同步密码" autocomplete="off" />
         <button id="lockPeek" type="button">显示</button>
@@ -259,8 +259,8 @@
   <!-- 应用 -->
   <div id="app" class="hidden">
     <header class="appbar">
-      <button class="icon-btn" id="menuBtn" title="文档">☰</button>
-      <div class="brand"><span class="mark">📝</span><span>云笔记</span></div>
+      <button class="icon-btn" id="menuBtn" title="文件">☰</button>
+      <div class="brand"><span class="mark">💻</span><span>代码仓库</span></div>
       <div class="grow"></div>
       <button class="icon-btn" id="themeBtn" title="切换主题">🌙</button>
       <button class="icon-btn" id="lockNow" title="锁定">🔒</button>
@@ -270,12 +270,12 @@
       <aside class="sidebar" id="sidebar">
         <div class="side-head">
           <div class="row">
-            <button class="btn" id="newBtn">＋ 新建笔记</button>
+            <button class="btn" id="newBtn">＋ 新建文件</button>
             <button class="icon-btn" id="refreshBtn" title="刷新列表">↻</button>
           </div>
           <div class="search">
             <span class="ico">🔍</span>
-            <input id="search" placeholder="搜索文档" autocomplete="off" />
+            <input id="search" placeholder="搜索文件" autocomplete="off" />
           </div>
         </div>
         <div class="side-list"><ul id="docList" style="list-style:none;margin:0;padding:0"></ul></div>
@@ -285,7 +285,7 @@
       <main class="main">
         <div class="editor-shell">
           <div class="doc-fields">
-            <input id="title" class="title-input" placeholder="文件名，如 笔记.md / script.py" />
+            <input id="title" class="title-input" placeholder="文件名，如 main.py / index.js" />
             <input id="folder" class="folder-input" placeholder="子目录（存 docs/ 下）" autocomplete="off" />
           </div>
           <div class="editor-bar">
@@ -294,7 +294,7 @@
               <button class="tab" data-view="preview">预览</button>
             </div>
             <div class="grow"></div>
-            <button class="icon-btn" id="templateBtn" title="插入模板">📝</button>
+<button class="icon-btn" id="templateBtn" title="插入模板">⌨️</button>
             <button class="icon-btn" id="clearBtn" title="清空">🧹</button>
           </div>
           <div class="editor-body">
@@ -441,7 +441,7 @@ $('#lockGo').onclick = unlock;
 $('#lockNow').onclick = lockNow;
 $('#lockPass').addEventListener('keydown', e => { if (e.key === 'Enter') unlock(); });
 
-/* ---------- 文档列表 ---------- */
+/* ---------- 文件列表 ---------- */
 async function loadDocs() {
   const btn = $('#refreshBtn');
   $('#docCount').textContent = '加载中…'; btn.disabled = true;
@@ -457,7 +457,7 @@ async function loadDocs() {
     renderDocs();
   } catch (e) {
     $('#docCount').textContent = '加载失败';
-    toast('加载文档失败：' + netErr(e), 'err');
+    toast('加载文件失败：' + netErr(e), 'err');
   } finally {
     btn.disabled = false;
   }
@@ -477,7 +477,7 @@ function renderDocs() {
   if (!list.length) {
     const div = document.createElement('li');
     div.className = 'empty';
-    div.textContent = docs.length ? '没有匹配的文件' : '还没有文件，点「新建笔记」开始';
+    div.textContent = docs.length ? '没有匹配的文件' : '还没有文件，点「新建文件」开始';
     ul.appendChild(div);
     return;
   }
@@ -524,7 +524,7 @@ async function deleteDoc(d) {
   try {
     const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${apiPath(d.path)}`, {
       method: 'DELETE', headers: ghHeaders(),
-      body: JSON.stringify({ message: `删除笔记：${d.path}`, sha: d.sha, branch: GH_BRANCH })
+      body: JSON.stringify({ message: `删除代码：${d.path}`, sha: d.sha, branch: GH_BRANCH })
     });
     if (!(r.status === 200 || r.status === 202 || r.status === 204)) throw new Error(await errMsg(r));
     if (currentPath === d.path) newNote(false);
@@ -593,11 +593,30 @@ $('#clearBtn').onclick = () => {
   toast('已清空', 'info', 2000);
 };
 $('#templateBtn').onclick = () => {
-  const d = new Date(), p = n => String(n).padStart(2, '0');
-  const tpl = `# ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} 记录\n\n## 待办\n\n- [ ] \n\n## 记录\n\n\n> 同步时间：${d.toLocaleString()}\n`;
+  const tpl = codeTemplate(langOf(currentFileName()));
   $('#editor').value = ($('#editor').value ? $('#editor').value.replace(/\s+$/, '') + '\n\n' : '') + tpl;
   updateCount(); saveDraft();
 };
+function codeTemplate(lang) {
+  const d = new Date(), p = n => String(n).padStart(2, '0');
+  const stamp = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  switch (lang) {
+    case 'python':
+      return `#!/usr/bin/env python3\n# ${stamp}\n\n\ndef main():\n    pass\n\n\nif __name__ == '__main__':\n    main()\n`;
+    case 'javascript':
+      return `// ${stamp}\n\nfunction main() {\n  // TODO\n}\n\nmain();\n`;
+    case 'typescript':
+      return `// ${stamp}\n\nfunction main(): void {\n  // TODO\n}\n\nmain();\n`;
+    case 'bash':
+      return `#!/usr/bin/env bash\n# ${stamp}\nset -euo pipefail\n\n`;
+    case 'html':
+      return `<!-- ${stamp} -->\n<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<title></title>\n</head>\n<body>\n\n</body>\n</html>\n`;
+    case 'sql':
+      return `-- ${stamp}\nSELECT 1;\n`;
+    default:
+      return `# ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} 记录\n\n## 待办\n\n- [ ] \n\n## 记录\n\n\n> 同步时间：${d.toLocaleString()}\n`;
+  }
+}
 
 /* ---------- Markdown 预览 + 代码高亮（零依赖轻量实现） ---------- */
 function escHtml(s) {
@@ -705,7 +724,7 @@ function mdRender(src) {
 /* ---------- 路径 ---------- */
 function autoTitle() {
   const d = new Date(), p = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.md`;
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.txt`;
 }
 function cleanSeg(s, max) {
   let t = s.replace(/[\0-\x1f\x7f]/g, '').trim().replace(/^\.+/, '');
@@ -715,8 +734,8 @@ function cleanSeg(s, max) {
 function buildPath(folder, title) {
   const segs = [NOTE_BASE];
   folder.replace(/\\/g, '/').split('/').forEach(p => { const s = cleanSeg(p, 64); if (s && s !== '.' && s !== '..' && s !== NOTE_BASE) segs.push(s); });
-  // 后缀不固定：原样保留用户输入的扩展名，仅在无可用文件名时给默认 .md
-  let name = cleanSeg(title, 100) || 'note.md';
+  // 后缀不固定：原样保留用户输入的扩展名，仅在无可用文件名时给默认 .txt
+  let name = cleanSeg(title, 100) || 'untitled.txt';
   // 去掉用户误填的前缀 docs，避免 docs/docs 重复；同时防止标题就叫 docs
   if (segs.length > 1 && segs[1] === NOTE_BASE) segs.splice(1, 1);
   segs.push(name);
@@ -745,7 +764,7 @@ async function save() {
   if (te.encode(content).length > MAX_PLAINTEXT) { toast('正文超过 1MB，请拆分保存', 'err'); return; }
   let title = $('#title').value.trim();
   if (!title && $('#autoDate').checked) { title = autoTitle(); $('#title').value = title; }
-  if (!title) title = 'note.md';
+  if (!title) title = 'untitled.txt';
   const folder = $('#folder').value.trim();
 
   const btn = $('#saveBtn'); btn.disabled = true; btn.textContent = '保存中…';
@@ -763,7 +782,7 @@ async function save() {
     else if (get.status !== 404) { throw new Error('检查文件失败：' + await errMsg(get)); }
     if (sha && !$('#overwrite').checked) throw new Error('文件已存在，未允许覆盖');
 
-    const body = { message: `同步笔记：${path}`, content: b64encode(te.encode(content)), branch: GH_BRANCH };
+    const body = { message: `同步代码：${path}`, content: b64encode(te.encode(content)), branch: GH_BRANCH };
     if (sha) body.sha = sha;
     const resp = await gh(url, { method: 'PUT', headers: ghHeaders(), body: JSON.stringify(body) });
     if (resp.status === 200 || resp.status === 201) {
