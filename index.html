@@ -193,6 +193,14 @@
   .preview blockquote { margin: 12px 0; padding: 6px 14px; border-left: 3px solid var(--border-strong); color: var(--muted); }
   .preview hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
   .preview a { color: var(--accent); }
+  .code-lang { font-size: 11px; color: var(--muted); margin-bottom: 8px; user-select: none; }
+  .preview pre code .tok-k { color: #7c3aed; font-weight: 600; }
+  .preview pre code .tok-s { color: #b45309; }
+  .preview pre code .tok-c { color: var(--muted); font-style: italic; }
+  .preview pre code .tok-n { color: #0e7490; }
+  [data-theme="dark"] .preview pre code .tok-k { color: #c4b5fd; }
+  [data-theme="dark"] .preview pre code .tok-s { color: #fbbf24; }
+  [data-theme="dark"] .preview pre code .tok-n { color: #67e8f3; }
 
   .editor-foot {
     flex: none; border-top: 1px solid var(--border); background: var(--surface);
@@ -277,7 +285,7 @@
       <main class="main">
         <div class="editor-shell">
           <div class="doc-fields">
-            <input id="title" class="title-input" placeholder="无标题" />
+            <input id="title" class="title-input" placeholder="文件名，如 笔记.md / script.py" />
             <input id="folder" class="folder-input" placeholder="子目录（存 docs/ 下）" autocomplete="off" />
           </div>
           <div class="editor-bar">
@@ -443,8 +451,8 @@ async function loadDocs() {
     if (!r.ok) throw new Error(await errMsg(r));
     const tree = await r.json();
     docs = (tree.tree || []).filter(x =>
-      x.type === 'blob' && /\.md$/i.test(x.path) &&
-      x.path.startsWith(NOTE_BASE + '/') &&
+      x.type === 'blob' &&
+      x.path.startsWith(NOTE_BASE + '/') && x.path !== NOTE_BASE &&
       !x.path.endsWith('/README.md') && x.path !== `${NOTE_BASE}/README.md`);
     renderDocs();
   } catch (e) {
@@ -463,13 +471,13 @@ function renderDocs() {
   const q = $('#search').value.trim().toLowerCase();
   const list = docs.filter(d => !q || d.path.toLowerCase().includes(q))
     .sort((a, b) => a.path.localeCompare(b.path));
-  $('#docCount').textContent = docs.length ? `${list.length}/${docs.length} 篇` : '暂无文档';
+  $('#docCount').textContent = docs.length ? `${list.length}/${docs.length} 个文件` : '暂无文件';
   const ul = $('#docList');
   ul.innerHTML = '';
   if (!list.length) {
     const div = document.createElement('li');
     div.className = 'empty';
-    div.textContent = docs.length ? '没有匹配的文档' : '还没有文档，点「新建笔记」开始';
+    div.textContent = docs.length ? '没有匹配的文件' : '还没有文件，点「新建笔记」开始';
     ul.appendChild(div);
     return;
   }
@@ -547,10 +555,10 @@ function switchView(v) {
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.view === v));
   $('#editor').classList.toggle('hidden', !edit);
   $('#preview').classList.toggle('hidden', edit);
-  if (!edit) $('#preview').innerHTML = mdRender($('#editor').value);
+  if (!edit) $('#preview').innerHTML = renderPreview($('#editor').value);
 }
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => switchView(b.dataset.view));
-function refreshPreview() { if (!$('#preview').classList.contains('hidden')) $('#preview').innerHTML = mdRender($('#editor').value); }
+function refreshPreview() { if (!$('#preview').classList.contains('hidden')) $('#preview').innerHTML = renderPreview($('#editor').value); }
 
 function updateCount() {
   const v = $('#editor').value;
@@ -591,13 +599,75 @@ $('#templateBtn').onclick = () => {
   updateCount(); saveDraft();
 };
 
-/* ---------- Markdown 预览 ---------- */
+/* ---------- Markdown 预览 + 代码高亮（零依赖轻量实现） ---------- */
 function escHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+function langOf(name) {
+  const m = /\.([A-Za-z0-9]{1,10})$/.exec(name || '');
+  const ext = m ? m[1].toLowerCase() : '';
+  const alias = { js: 'javascript', jsx: 'javascript', ts: 'typescript', tsx: 'typescript', py: 'python', sh: 'bash', zsh: 'bash', shell: 'bash', yml: 'yaml', md: 'markdown', mdown: 'markdown', mkd: 'markdown', h: 'c', hpp: 'cpp', cc: 'cpp', cxx: 'cpp', 'c++': 'cpp', htm: 'html', vue: 'html' };
+  return alias[ext] || ext || 'text';
+}
+function fenceLangNorm(s) {
+  const t = (s || '').toLowerCase();
+  if (t === 'c++') return 'cpp';
+  if (t === 'c#') return 'c';
+  return langOf('x.' + s);
+}
+function isMarkdownFile(name) {
+  const lang = langOf(name);
+  return lang === 'markdown' || lang === 'text' || lang === 'txt';
+}
+const KEYWORDS = {
+  python: 'False None True and as assert async await break class continue def del elif else except finally for from global if import in is lambda nonlocal not or pass raise return try while with yield'.split(' '),
+  javascript: 'break case catch class const continue debugger default delete do else export extends false finally for function if import in instanceof let new null return super switch this throw true try typeof var void while with yield async await of from as'.split(' '),
+  typescript: 'break case catch class const continue debugger default delete do else export extends false finally for function if import in instanceof let new null return super switch this throw true try typeof var void while with yield async await of from as interface type enum implements readonly'.split(' '),
+  bash: 'if then else elif fi for while in do done case esac function echo cd ls exit export local return set unset source alias'.split(' '),
+  sql: 'SELECT FROM WHERE AND OR NOT INSERT INTO UPDATE DELETE CREATE TABLE DROP ALTER JOIN ON AS ORDER BY GROUP LIMIT VALUES SET select from where and or not insert into update delete create table drop alter join on as order by group limit values set'.split(' '),
+  json: ['true', 'false', 'null'],
+  yaml: ['true', 'false', 'null', 'on', 'off'],
+  html: ['div', 'span', 'html', 'head', 'body', 'script', 'style'],
+  css: [],
+  java: 'abstract assert boolean break byte case catch char class const continue default do double else enum extends final finally float for if implements import instanceof int interface long native new package private protected public return short static strictfp super switch synchronized this throw throws transient try void volatile while true false null'.split(' '),
+  go: 'break case chan const continue default defer else fallthrough for func go goto if import interface map package range return select struct switch type var nil true false'.split(' '),
+  rust: 'as break const continue crate else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while'.split(' '),
+  c: 'auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while'.split(' '),
+  cpp: 'auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while class namespace template typename new delete this friend virtual override public private protected true false nullptr using'.split(' ')
+};
+KEYWORDS.generic = [...new Set([...KEYWORDS.python, ...KEYWORDS.javascript])];
+function highlightEscaped(esc, lang) {
+  if (!lang || lang === 'text' || lang === 'txt' || lang === 'markdown') return esc;
+  const kw = new Set(KEYWORDS[lang] || KEYWORDS.generic);
+  return esc.replace(/(&lt;!--[\s\S]*?--&gt;|\/\*[\s\S]*?\*\/|(?:^|\s)(?:\/\/[^\n]*|#[^\n]*))|(&quot;.*?&quot;|&#39;.*?&#39;|`[^`\n]*`)|\b(\d+(?:\.\d+)?)\b|\b([A-Za-z_$][\w$]*)\b/g,
+    (m, com, str, num, word) => {
+      if (com) return '<span class="tok-c">' + com + '</span>';
+      if (str) return '<span class="tok-s">' + str + '</span>';
+      if (num) return '<span class="tok-n">' + num + '</span>';
+      if (word && kw.has(word)) return '<span class="tok-k">' + word + '</span>';
+      return m;
+    });
+}
+function highlightCode(raw, lang) {
+  return highlightEscaped(escHtml(raw).replace(/\n$/, ''), lang);
+}
+function currentFileName() {
+  const t = ($('#title').value || '').trim();
+  if (t) return t;
+  if (currentPath) return currentPath.split('/').pop();
+  return '';
+}
+function renderPreview(src) {
+  const name = currentFileName();
+  if (!isMarkdownFile(name)) {
+    const lang = langOf(name);
+    return `<pre><code><div class="code-lang">${escHtml(lang)} · ${escHtml(name)}</div>${highlightCode(src, lang) || '<span style="color:var(--muted)">（空）</span>'}</code></pre>`;
+  }
+  return mdRender(src);
+}
 function mdRender(src) {
   const lines = escHtml(src).split('\n');
-  let html = '', inCode = false, inList = false, para = [];
+  let html = '', inCode = false, fenceLang = '', codeBuf = [], inList = false, para = [];
   const flush = () => { if (para.length) { html += '<p>' + inline(para.join(' ')) + '</p>'; para = []; } };
   const inline = s => s
     .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -605,8 +675,16 @@ function mdRender(src) {
     .replace(/(^|\W)\*([^*\n]+)\*/g, '$1<em>$2</em>')
     .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
   for (const ln of lines) {
-    if (/^```/.test(ln)) { if (inCode) { html += '</code></pre>'; inCode = false; } else { flush(); html += '<pre><code>'; inCode = true; } continue; }
-    if (inCode) { html += ln + '\n'; continue; }
+    const fence = ln.match(/^```(\S*)\s*$/);
+    if (fence) {
+      if (inCode) {
+        const lang = fenceLang ? fenceLangNorm(fenceLang) : '';
+        html += (fenceLang ? `<div class="code-lang">${fenceLang}</div>` : '') + highlightEscaped(codeBuf.join('\n'), lang) + '</code></pre>';
+        inCode = false; fenceLang = ''; codeBuf = [];
+      } else { flush(); html += '<pre><code>'; inCode = true; fenceLang = (fence[1] || '').slice(0, 20); }
+      continue;
+    }
+    if (inCode) { codeBuf.push(ln); continue; }
     const h = ln.match(/^(#{1,4})\s+(.*)/);
     if (h) { flush(); if (inList) { html += '</ul>'; inList = false; } html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`; continue; }
     if (/^\s*---+\s*$/.test(ln)) { flush(); html += '<hr>'; continue; }
@@ -616,7 +694,11 @@ function mdRender(src) {
     if (/^\s*$/.test(ln)) { flush(); if (inList) { html += '</ul>'; inList = false; } continue; }
     para.push(ln.trim());
   }
-  flush(); if (inList) html += '</ul>'; if (inCode) html += '</code></pre>';
+  flush(); if (inList) html += '</ul>';
+  if (inCode) {
+    const lang = fenceLang ? fenceLangNorm(fenceLang) : '';
+    html += (fenceLang ? `<div class="code-lang">${fenceLang}</div>` : '') + highlightEscaped(codeBuf.join('\n'), lang) + '</code></pre>';
+  }
   return html || '<p style="color:var(--muted)">（空）</p>';
 }
 
@@ -633,8 +715,8 @@ function cleanSeg(s, max) {
 function buildPath(folder, title) {
   const segs = [NOTE_BASE];
   folder.replace(/\\/g, '/').split('/').forEach(p => { const s = cleanSeg(p, 64); if (s && s !== '.' && s !== '..' && s !== NOTE_BASE) segs.push(s); });
-  let name = cleanSeg(title, 100) || 'note';
-  if (!name.toLowerCase().endsWith('.md')) name += '.md';
+  // 后缀不固定：原样保留用户输入的扩展名，仅在无可用文件名时给默认 .md
+  let name = cleanSeg(title, 100) || 'note.md';
   // 去掉用户误填的前缀 docs，避免 docs/docs 重复；同时防止标题就叫 docs
   if (segs.length > 1 && segs[1] === NOTE_BASE) segs.splice(1, 1);
   segs.push(name);
