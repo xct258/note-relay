@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light dark">
+<meta name="description" content="在线存代码，一键保存到本仓库">
+<meta name="theme-color" content="#4f46e5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1014" media="(prefers-color-scheme: dark)">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src https://api.github.com; base-uri 'none'; form-action 'none'">
 <title>代码仓库</title>
 <style>
   :root {
@@ -193,6 +197,9 @@
   .preview blockquote { margin: 12px 0; padding: 6px 14px; border-left: 3px solid var(--border-strong); color: var(--muted); }
   .preview hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
   .preview a { color: var(--accent); }
+  .preview ul, .preview ol { padding-left: 22px; margin: 10px 0; }
+  .preview li { margin: 4px 0; }
+  .preview li input[type="checkbox"] { margin-right: 6px; vertical-align: middle; accent-color: var(--accent); }
   .code-lang { font-size: 11px; color: var(--muted); margin-bottom: 8px; user-select: none; }
   .preview pre code .tok-k { color: #7c3aed; font-weight: 600; }
   .preview pre code .tok-s { color: #b45309; }
@@ -211,6 +218,7 @@
   .check { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); user-select: none; }
   .check input { accent-color: var(--accent); }
   #saveBtn { min-width: 120px; justify-content: center; }
+  #saveBtn.dirty::after { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; opacity: .85; }
 
   /* ---------- 移动端 ---------- */
   #backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 40; }
@@ -248,8 +256,8 @@
       <h1>代码仓库</h1>
       <p>输入同步密码以访问你的代码</p>
       <div class="lock-field">
-        <input id="lockPass" type="password" placeholder="同步密码" autocomplete="off" />
-        <button id="lockPeek" type="button">显示</button>
+        <input id="lockPass" type="password" placeholder="同步密码" autocomplete="off" aria-label="同步密码" autofocus />
+        <button id="lockPeek" type="button" aria-label="显示或隐藏密码">显示</button>
       </div>
       <button class="btn btn-primary" id="lockGo" style="width:100%;justify-content:center;margin-top:14px">解锁</button>
       <div class="lock-error" id="lockErr"></div>
@@ -313,7 +321,7 @@
     </div>
   </div>
 
-  <div id="toasts" class="toasts"></div>
+  <div id="toasts" class="toasts" role="status" aria-live="polite"></div>
 
 <script>
 'use strict';
@@ -325,6 +333,7 @@ const NOTE_BASE = 'docs';
 const SYNC_CREDENTIAL = 'AQAEuvCfr4FcbTM+Uep1vgo+qmAPinw8Is8GkTLeL4Jdb7JkGbYqROi3hLDbjAZPxem6O7nnNl7NtPqmF32zCx7JFZYzA10nTyTgXVkuBcxJLqFN9JHWqU3Z0WhEx1SMgqQN4EOSFTtaNErbbTSzaHu92ROzpe5x7xHY+7s3pjjb86/htLZlhlNeU+E0LA==';
 const PBKDF2_ITER = 310000;
 const COOLDOWN_SEC = 60;
+const REQ_TIMEOUT = 20000;
 const MAX_PLAINTEXT = 1024 * 1024;
 
 const $ = s => document.querySelector(s);
@@ -377,9 +386,22 @@ function ghHeaders() {
   return { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${cred}`, 'Content-Type': 'application/json' };
 }
 async function gh(path, init) {
-  return fetch('https://api.github.com' + path, Object.assign({
-    headers: { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${cred}` }
-  }, init || {}));
+  const opt = Object.assign({ method: 'GET' }, init || {});
+  opt.headers = Object.assign(
+    { 'Accept': 'application/vnd.github+json', 'Authorization': `Bearer ${cred}` },
+    opt.headers || {}
+  );
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), REQ_TIMEOUT);
+  opt.signal = ac.signal;
+  try {
+    return await fetch('https://api.github.com' + path, opt);
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('请求超时，请检查网络后重试');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 async function errMsg(resp) {
   try { const e = await resp.json(); return e.message || ('HTTP ' + resp.status); }
@@ -422,6 +444,11 @@ async function unlock() {
     $('#lock').classList.add('hidden');
     $('#app').classList.remove('hidden');
     await loadDocs();
+    const last = localStorage.getItem('nr_last');
+    if (last && !$('#editor').value.trim()) {
+      const hit = docs.find(d => d.path === last);
+      if (hit) await openDoc(hit, true);
+    }
   } catch {
     cred = '';
     lockMsg('密码错误，无法访问');
@@ -452,8 +479,8 @@ async function loadDocs() {
     const tree = await r.json();
     docs = (tree.tree || []).filter(x =>
       x.type === 'blob' &&
-      x.path.startsWith(NOTE_BASE + '/') && x.path !== NOTE_BASE &&
-      !x.path.endsWith('/README.md') && x.path !== `${NOTE_BASE}/README.md`);
+      x.path.startsWith(NOTE_BASE + '/') &&
+      x.path !== `${NOTE_BASE}/README.md`);
     renderDocs();
   } catch (e) {
     $('#docCount').textContent = '加载失败';
@@ -472,50 +499,69 @@ function renderDocs() {
   const list = docs.filter(d => !q || d.path.toLowerCase().includes(q))
     .sort((a, b) => a.path.localeCompare(b.path));
   $('#docCount').textContent = docs.length ? `${list.length}/${docs.length} 个文件` : '暂无文件';
-  const ul = $('#docList');
-  ul.innerHTML = '';
+  const frag = document.createDocumentFragment();
   if (!list.length) {
-    const div = document.createElement('li');
-    div.className = 'empty';
-    div.textContent = docs.length ? '没有匹配的文件' : '还没有文件，点「新建文件」开始';
-    ul.appendChild(div);
-    return;
-  }
-  for (const d of list) {
     const li = document.createElement('li');
-    li.className = 'doc' + (d.path === currentPath ? ' active' : '');
-    const dot = document.createElement('span'); dot.className = 'dot';
-    const info = document.createElement('div'); info.className = 'info';
-    const rel = d.path.startsWith(NOTE_BASE + '/') ? d.path.slice(NOTE_BASE.length + 1) : d.path;
-    const parts = rel.split('/'); const name = parts.pop();
-    const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = name;
-    const sub = document.createElement('div'); sub.className = 'sub';
-    sub.textContent = (parts.length ? parts.join('/') + '/ · ' : '') + fmtSize(d.size);
-    info.append(nm, sub);
-    const del = document.createElement('button'); del.className = 'del'; del.title = '删除'; del.textContent = '🗑';
-    del.onclick = e => { e.stopPropagation(); deleteDoc(d); };
-    li.append(dot, info, del);
-    li.onclick = () => openDoc(d);
-    ul.appendChild(li);
+    li.className = 'empty';
+    li.textContent = docs.length ? '没有匹配的文件' : '还没有文件，点「新建文件」开始';
+    frag.appendChild(li);
+  } else {
+    for (const d of list) {
+      const li = document.createElement('li');
+      li.className = 'doc' + (d.path === currentPath ? ' active' : '');
+      li.dataset.path = d.path;
+      const dot = document.createElement('span'); dot.className = 'dot';
+      const info = document.createElement('div'); info.className = 'info';
+      const rel = d.path.startsWith(NOTE_BASE + '/') ? d.path.slice(NOTE_BASE.length + 1) : d.path;
+      const parts = rel.split('/'); const name = parts.pop();
+      const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = name; nm.title = d.path;
+      const sub = document.createElement('div'); sub.className = 'sub';
+      sub.textContent = (parts.length ? parts.join('/') + '/ · ' : '') + fmtSize(d.size);
+      info.append(nm, sub);
+      const del = document.createElement('button');
+      del.className = 'del'; del.title = '删除'; del.setAttribute('aria-label', '删除 ' + d.path); del.textContent = '🗑';
+      li.append(dot, info, del);
+      frag.appendChild(li);
+    }
   }
+  $('#docList').replaceChildren(frag);
 }
+$('#docList').addEventListener('click', e => {
+  const li = e.target.closest('.doc');
+  if (!li || !li.dataset.path) return;
+  const d = docs.find(x => x.path === li.dataset.path);
+  if (!d) return;
+  if (e.target.closest('.del')) deleteDoc(d); else openDoc(d);
+});
 $('#refreshBtn').onclick = loadDocs;
-$('#search').addEventListener('input', renderDocs);
+let searchTimer = null;
+$('#search').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(renderDocs, 120);
+});
 
 /* ---------- 打开 / 删除 ---------- */
-async function openDoc(d) {
+let openToken = 0;
+async function openDoc(d, silent) {
+  const token = ++openToken;
   try {
     const r = await gh(`/repos/${GH_OWNER}/${GH_REPO}/contents/${apiPath(d.path)}?ref=${GH_BRANCH}`);
+    if (token !== openToken) return;
     if (!r.ok) throw new Error(await errMsg(r));
     const info = await r.json();
     if (Array.isArray(info) || info.type !== 'file') throw new Error('目标不是文件');
     if (!info.content || info.encoding !== 'base64') throw new Error('文件过大，无法打开');
-    $('#editor').value = td.decode(b64decode(info.content.replace(/\s/g, '')));
+    const text = td.decode(b64decode(info.content.replace(/\s/g, '')));
+    if (token !== openToken) return;
+    $('#editor').value = text;
     setFields(d.path);
     currentPath = d.path;
-    updateCount(); saveDraft(); switchView('edit'); renderDocs();
-    toast('已打开 ' + d.path, 'ok', 2500);
+    savedSnapshot = text;
+    try { localStorage.setItem('nr_last', d.path); } catch { /* 忽略存储异常 */ }
+    updateCount(); updateDirty(); saveDraft(); switchView('edit'); renderDocs(); closeSidebar();
+    if (!silent) toast('已打开 ' + d.path, 'ok', 2500);
   } catch (e) {
+    if (token !== openToken) return;
     toast('打开失败：' + netErr(e), 'err');
   }
 }
@@ -527,7 +573,7 @@ async function deleteDoc(d) {
       body: JSON.stringify({ message: `删除代码：${d.path}`, sha: d.sha, branch: GH_BRANCH })
     });
     if (!(r.status === 200 || r.status === 202 || r.status === 204)) throw new Error(await errMsg(r));
-    if (currentPath === d.path) newNote(false);
+    if (currentPath === d.path) { newNote(false); try { localStorage.removeItem('nr_last'); } catch { /* 忽略 */ } }
     toast('已删除 ' + d.path, 'ok');
     await loadDocs();
   } catch (e) {
@@ -544,7 +590,8 @@ function setFields(path) {
 function newNote(refresh = true) {
   currentPath = null;
   $('#title').value = ''; $('#folder').value = ''; $('#editor').value = '';
-  updateCount(); switchView('edit');
+  savedSnapshot = '';
+  updateCount(); updateDirty(); switchView('edit');
   if (refresh) { saveDraft(); renderDocs(); }
   $('#title').focus();
 }
@@ -565,6 +612,11 @@ function updateCount() {
   const chars = [...v].length, lines = v ? v.split('\n').length : 0;
   $('#count').textContent = `${chars} 字 · ${lines} 行 · 约 ${Math.max(1, Math.round(chars / 400))} 分钟`;
 }
+/* 保存快照：与编辑器内容不同即视为「未保存」，在保存按钮上显示小圆点 */
+let savedSnapshot = '';
+function updateDirty() {
+  $('#saveBtn').classList.toggle('dirty', $('#editor').value !== savedSnapshot);
+}
 
 /* ---------- 草稿 ---------- */
 let draftTimer = null;
@@ -584,18 +636,18 @@ function loadDraft() {
   } catch { /* ignore */ }
 }
 ['title', 'folder', 'editor'].forEach(id =>
-  $('#' + id).addEventListener('input', () => { updateCount(); clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 1200); }));
+  $('#' + id).addEventListener('input', () => { updateCount(); updateDirty(); clearTimeout(draftTimer); draftTimer = setTimeout(saveDraft, 1200); }));
 $('#overwrite').addEventListener('change', saveDraft);
 $('#clearBtn').onclick = () => {
   localStorage.removeItem('nr_draft');
   $('#title').value = ''; $('#folder').value = ''; $('#editor').value = ''; $('#overwrite').checked = true;
-  currentPath = null; updateCount(); refreshPreview(); renderDocs();
+  currentPath = null; savedSnapshot = ''; updateCount(); updateDirty(); refreshPreview(); renderDocs();
   toast('已清空', 'info', 2000);
 };
 $('#templateBtn').onclick = () => {
   const tpl = codeTemplate(langOf(currentFileName()));
   $('#editor').value = ($('#editor').value ? $('#editor').value.replace(/\s+$/, '') + '\n\n' : '') + tpl;
-  updateCount(); saveDraft();
+  updateCount(); updateDirty(); saveDraft();
 };
 function codeTemplate(lang) {
   const d = new Date(), p = n => String(n).padStart(2, '0');
@@ -686,38 +738,55 @@ function renderPreview(src) {
 }
 function mdRender(src) {
   const lines = escHtml(src).split('\n');
-  let html = '', inCode = false, fenceLang = '', codeBuf = [], inList = false, para = [];
-  const flush = () => { if (para.length) { html += '<p>' + inline(para.join(' ')) + '</p>'; para = []; } };
+  let html = '', inCode = false, fenceLang = '', codeBuf = [], listTag = '', para = [];
   const inline = s => s
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|\W)\*([^*\n]+)\*/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  const flushPara = () => { if (para.length) { html += '<p>' + inline(para.join(' ')) + '</p>'; para = []; } };
+  const closeList = () => { if (listTag) { html += '</' + listTag + '>'; listTag = ''; } };
+  const flushAll = () => { flushPara(); closeList(); };
+  const emitItem = (body, ordered) => {
+    const tag = ordered ? 'ol' : 'ul';
+    if (listTag && listTag !== tag) closeList();
+    if (!listTag) { html += '<' + tag + '>'; listTag = tag; }
+    html += '<li>' + body + '</li>';
+  };
+  const emitCode = () => {
+    const lang = fenceLang ? fenceLangNorm(fenceLang) : '';
+    const label = fenceLang ? `<div class="code-lang">${escHtml(fenceLang)}</div>` : '';
+    html += '<pre><code>' + label + highlightEscaped(codeBuf.join('\n'), lang) + '</code></pre>';
+  };
   for (const ln of lines) {
     const fence = ln.match(/^```(\S*)\s*$/);
     if (fence) {
-      if (inCode) {
-        const lang = fenceLang ? fenceLangNorm(fenceLang) : '';
-        html += (fenceLang ? `<div class="code-lang">${fenceLang}</div>` : '') + highlightEscaped(codeBuf.join('\n'), lang) + '</code></pre>';
-        inCode = false; fenceLang = ''; codeBuf = [];
-      } else { flush(); html += '<pre><code>'; inCode = true; fenceLang = (fence[1] || '').slice(0, 20); }
+      if (inCode) { emitCode(); inCode = false; fenceLang = ''; codeBuf = []; }
+      else { flushAll(); inCode = true; fenceLang = (fence[1] || '').slice(0, 20); }
       continue;
     }
     if (inCode) { codeBuf.push(ln); continue; }
     const h = ln.match(/^(#{1,4})\s+(.*)/);
-    if (h) { flush(); if (inList) { html += '</ul>'; inList = false; } html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`; continue; }
-    if (/^\s*---+\s*$/.test(ln)) { flush(); html += '<hr>'; continue; }
-    if (/^\s*>\s?/.test(ln)) { flush(); html += `<blockquote>${inline(ln.replace(/^\s*>\s?/, ''))}</blockquote>`; continue; }
-    const li = ln.match(/^\s*[-*+]\s+(.*)/);
-    if (li) { flush(); if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(li[1])}</li>`; continue; }
-    if (/^\s*$/.test(ln)) { flush(); if (inList) { html += '</ul>'; inList = false; } continue; }
+    if (h) { flushAll(); html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`; continue; }
+    if (/^\s*---+\s*$/.test(ln)) { flushAll(); html += '<hr>'; continue; }
+    if (/^\s*>\s?/.test(ln)) { flushAll(); html += `<blockquote>${inline(ln.replace(/^\s*>\s?/, ''))}</blockquote>`; continue; }
+    const task = ln.match(/^\s*[-*+]\s+\[([ xX])\]\s*(.*)/);
+    if (task) {
+      flushPara();
+      const checked = task[1].toLowerCase() === 'x';
+      emitItem(`<input type="checkbox" disabled${checked ? ' checked' : ''}> ${inline(task[2])}`, false);
+      continue;
+    }
+    const ul = ln.match(/^\s*[-*+]\s+(.*)/);
+    if (ul) { flushPara(); emitItem(inline(ul[1]), false); continue; }
+    const ol = ln.match(/^\s*\d+[.)]\s+(.*)/);
+    if (ol) { flushPara(); emitItem(inline(ol[1]), true); continue; }
+    if (/^\s*$/.test(ln)) { flushAll(); continue; }
+    closeList();
     para.push(ln.trim());
   }
-  flush(); if (inList) html += '</ul>';
-  if (inCode) {
-    const lang = fenceLang ? fenceLangNorm(fenceLang) : '';
-    html += (fenceLang ? `<div class="code-lang">${fenceLang}</div>` : '') + highlightEscaped(codeBuf.join('\n'), lang) + '</code></pre>';
-  }
+  flushPara(); closeList();
+  if (inCode) emitCode();
   return html || '<p style="color:var(--muted)">（空）</p>';
 }
 
@@ -787,7 +856,7 @@ async function save() {
     const resp = await gh(url, { method: 'PUT', headers: ghHeaders(), body: JSON.stringify(body) });
     if (resp.status === 200 || resp.status === 201) {
       toast('已保存到仓库 · ' + path, 'ok');
-      $('#editor').value = ''; updateCount(); refreshPreview(); saveDraft();
+      $('#editor').value = ''; savedSnapshot = ''; updateCount(); updateDirty(); refreshPreview(); saveDraft();
       currentPath = path; setFields(path); await loadDocs();
       startCooldown(COOLDOWN_SEC);
     } else if (resp.status === 409) { throw new Error('文件刚被改动，请重试'); }
@@ -816,10 +885,15 @@ $('#menuBtn').onclick = openSidebar;
 
 /* ---------- 快捷键 ---------- */
 document.addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !$('#app').classList.contains('hidden')) { e.preventDefault(); save(); }
+  if ($('#app').classList.contains('hidden')) return;
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'Enter' || e.key.toLowerCase() === 's')) {
+    e.preventDefault(); save();
+  } else if (e.key === 'Escape') {
+    closeSidebar();
+  }
 });
 
-initTheme(); loadDraft(); updateCount();
+initTheme(); loadDraft(); updateCount(); updateDirty();
 </script>
 </body>
 </html>
